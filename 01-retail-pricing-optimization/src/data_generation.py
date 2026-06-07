@@ -36,7 +36,7 @@ def create_sku_master(random_seed: int = RANDOM_SEED) -> pd.DataFrame:
     category_counts = {
         "Electronics": 15,
         "Fitness": 10,
-        "Home": 15,
+        "Home": 15, 
         "Outdoor": 10,
     }
 
@@ -206,7 +206,7 @@ def add_event_features(calendar: pd.DataFrame) -> pd.DataFrame:
     """
     calendar = calendar.copy()
 
-    calendar["event_name"] = "None"
+    calendar["event_name"] = "No Event"
     calendar["event_phase"] = "normal"
     calendar["base_event_multiplier"] = 1.00
 
