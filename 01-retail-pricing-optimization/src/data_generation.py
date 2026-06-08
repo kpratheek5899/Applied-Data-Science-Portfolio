@@ -365,8 +365,91 @@ def generate_retail_data(
         * df["noise"]
     )
 
-    # Observed units are generated from a Poisson process
-    df["units"] = rng.poisson(lam=df["expected_units"].clip(lower=0.1))
+    # Potential demand generated from a Poisson process
+    df["demand_units"] = rng.poisson(lam=df["expected_units"].clip(lower=0.1))
+
+    # Inventory capacity is based on product demand profile.
+    # Commodity and promo-sensitive products receive deeper inventory positions.
+    product_inventory_multiplier = {
+        "Premium": 5,
+        "Commodity": 7,
+        "Seasonal": 6,
+        "Promo Sensitive": 6,
+    }
+
+    channel_inventory_multiplier = {
+        "Web": 1.00,
+        "App": 0.75,
+        "BOPIS": 0.90,
+        "Store": 1.20,
+    }
+
+    df["inventory_capacity"] = (
+        df["base_daily_demand"]
+        * df["product_type"].map(product_inventory_multiplier)
+        * df["channel"].map(channel_inventory_multiplier)
+    ).round().astype(int)
+
+    df["inventory_capacity"] = df["inventory_capacity"].clip(lower=20)
+
+    # Weekly replenishment approximation:
+    # Each week starts with replenished inventory near 80% of capacity.
+    # Event periods receive higher planned inventory, but demand may still exceed supply.
+    event_inventory_boost = np.where(df["event_phase"] == "event", 1.25, 1.00)
+
+    df["starting_inventory"] = (
+        df["inventory_capacity"]
+        * 0.6
+        * event_inventory_boost
+        * rng.uniform(0.85, 1.10, size=len(df))
+    ).round().astype(int)
+
+    df["starting_inventory"] = df[["starting_inventory", "inventory_capacity"]].min(axis=1)
+
+    # Actual units sold cannot exceed available inventory.
+    df["units"] = np.minimum(df["demand_units"], df["starting_inventory"])
+
+    # Lost sales represent unmet demand due to inventory constraints.
+    df["lost_sales"] = df["demand_units"] - df["units"]
+
+    df["ending_inventory"] = df["starting_inventory"] - df["units"]
+
+    df["inventory_pct_remaining"] = (
+        df["ending_inventory"] / df["inventory_capacity"]
+    ).replace([np.inf, -np.inf], 0).fillna(0)
+
+    # Stock status derived from inventory remaining.
+    conditions = [
+        df["ending_inventory"] <= 0,
+        df["inventory_pct_remaining"] <= 0.15,
+        df["inventory_pct_remaining"] <= 0.40,
+        df["inventory_pct_remaining"] > 0.40,
+    ]
+
+    choices = [
+        "Out Of Stock",
+        "Limited Availability",
+        "Low Stock",
+        "In Stock",
+    ]
+
+    df["stock_status"] = np.select(
+        conditions,
+        choices,
+        default="Unknown",
+    )
+
+    stock_message_map = {
+        "In Stock": "Available Today",
+        "Low Stock": "Low Stock",
+        "Limited Availability": "Only A Few Left",
+        "Out Of Stock": "Out Of Stock",
+    }
+
+    df["stock_message"] = df["stock_status"].map(stock_message_map)
+
+    df["stockout_flag"] = (df["stock_status"] == "Out Of Stock").astype(int)
+    df["lost_sales_flag"] = (df["lost_sales"] > 0).astype(int)
 
     df["revenue"] = (df["units"] * df["price"]).round(2)
     df["gross_profit"] = (df["units"] * (df["price"] - df["cost"])).round(2)
@@ -397,7 +480,17 @@ def generate_retail_data(
         "price_index",
         "price_effect",
         "expected_units",
+        "demand_units",
         "units",
+        "lost_sales",
+        "inventory_capacity",
+        "starting_inventory",
+        "ending_inventory",
+        "inventory_pct_remaining",
+        "stock_status",
+        "stock_message",
+        "stockout_flag",
+        "lost_sales_flag",
         "revenue",
         "gross_profit",
     ]
@@ -408,14 +501,15 @@ def generate_retail_data(
 if __name__ == "__main__":
     output_path = (
         "01-retail-pricing-optimization/"
-        "data/simulated/nova_retail_simulated_data_v1.csv"
+        "data/simulated/nova_retail_simulated_data_v2_inventory.csv"
     )
 
     retail_df = generate_retail_data()
     retail_df.to_csv(output_path, index=False)
 
-    print("Nova Retail simulated dataset created.")
+    print("Nova Retail simulated dataset with inventory created.")
     print(f"Rows: {len(retail_df):,}")
     print(f"Columns: {len(retail_df.columns):,}")
+
     print(f"Output: {output_path}")
     print(retail_df.head())
