@@ -2,5 +2,21 @@
 __pycache__/
 .ipynb_checkpoints/
 .env
-# Generated datasets
+
+# Generated / regenerable data (all reproducible via src/data_generation.py
+# or the relevant project's pipeline -- never commit these)
 01-retail-pricing-optimization/data/simulated/
+01-retail-pricing-optimization/data/raw/
+01-retail-pricing-optimization/data/processed/
+
+# MLflow run artifacts (Project 2 will generate these locally)
+mlruns/
+mlartifacts/
+
+# Vector store indices (Project 3 will generate these locally)
+*.faiss
+chroma_db/
+
+# OS cruft
+.DS_Store
+Thumbs.db

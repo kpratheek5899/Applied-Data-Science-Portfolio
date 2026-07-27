@@ -1,20 +1,20 @@
 """
 Data generation module for the Retail Pricing & Capacity Optimization Engine.
 
-This module simulates the first version of Nova Retail's omnichannel retail economy.
+This module simulates Nova Retail's omnichannel retail economy end to end.
 
-Day 3 Simulator v1 includes:
-- SKU master table
-- Store master table
-- Date calendar
-- Event calendar
-- Product-level elasticity
-- Product-level seasonality strength
-- Price variation
-- Demand generation
-- Units, revenue, and gross profit
+Simulator v3 includes everything from v1/v2 plus:
+- Promotion depth (SKU-level, on top of price elasticity effects)
+- Marketing spend by channel (search, social, display, email) with
+  channel-specific elasticities, scaled up during retail events
+- Digital funnel metrics (sessions, page views, conversion rate,
+  add-to-cart rate) for digitally-influenced channels
+- Store-level operational capacity (fulfillment capacity, labor hours,
+  BOPIS capacity, capacity utilization)
 
-Inventory, marketing, and capacity will be added in later versions.
+Every relationship embedded here is a *known* ground-truth parameter so that
+later phases (OLS, Bayesian elasticity recovery, optimization) can be graded
+against the truth instead of an unknown black box.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ def create_sku_master(random_seed: int = RANDOM_SEED) -> pd.DataFrame:
     category_counts = {
         "Electronics": 15,
         "Fitness": 10,
-        "Home": 15, 
+        "Home": 15,
         "Outdoor": 10,
     }
 
@@ -52,6 +52,15 @@ def create_sku_master(random_seed: int = RANDOM_SEED) -> pd.DataFrame:
         "Commodity": 1.30,
         "Seasonal": 1.50,
         "Promo Sensitive": 1.15,
+    }
+
+    # Promotion sensitivity multiplier applied on top of the pure price
+    # elasticity effect (Low / Medium / High / Very High from the spec).
+    product_type_promo_sensitivity = {
+        "Premium": 0.50,
+        "Commodity": 1.00,
+        "Seasonal": 1.30,
+        "Promo Sensitive": 1.60,
     }
 
     product_type_weights = {
@@ -119,6 +128,7 @@ def create_sku_master(random_seed: int = RANDOM_SEED) -> pd.DataFrame:
                     "cost": round(cost, 2),
                     "true_price_elasticity": product_type_elasticity[product_type],
                     "seasonality_strength": product_type_seasonality[product_type],
+                    "promo_sensitivity": product_type_promo_sensitivity[product_type],
                     "base_daily_demand": round(base_daily_demand, 2),
                 }
             )
@@ -128,10 +138,13 @@ def create_sku_master(random_seed: int = RANDOM_SEED) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def create_store_master() -> pd.DataFrame:
+def create_store_master(random_seed: int = RANDOM_SEED) -> pd.DataFrame:
     """
-    Create 20 stores across three regions.
+    Create 20 stores across three regions, each with an operational
+    capacity profile (fulfillment capacity, labor hours, BOPIS capacity).
     """
+    rng = np.random.default_rng(random_seed + 10)
+
     regions = (
         ["West"] * 7
         + ["Central"] * 6
@@ -141,10 +154,23 @@ def create_store_master() -> pd.DataFrame:
     rows = []
 
     for i, region in enumerate(regions, start=1):
+        # Store "size" drives both inventory profile (already used elsewhere)
+        # and operational capacity (units/day the store+labor can fulfill
+        # across all channels combined).
+        store_size_factor = rng.uniform(0.8, 1.4)
+
         rows.append(
             {
                 "store_id": f"STORE_{i:02d}",
                 "region": region,
+                # Calibrated so an average store-day (~50 SKUs x 4 channels
+                # at ~32 units each ~= 6,400 units/day) runs at roughly
+                # 70-85% utilization in normal periods, with event spikes
+                # legitimately pushing some stores over capacity -- which
+                # is exactly the constraint Phase 4's optimizer needs to see.
+                "store_capacity": round(7800 * store_size_factor),
+                "labor_hours": round(rng.uniform(220, 420)),
+                "bopis_capacity": round(1500 * store_size_factor),
             }
         )
 
@@ -200,6 +226,19 @@ def get_event_dates(year: int) -> dict[str, pd.Timestamp]:
     }
 
 
+# Marketing spend multiplier applied during the *event* window only. Retail
+# events are demand spikes but marketing spend spikes even harder to drive
+# awareness ahead of / during the event.
+EVENT_MARKETING_MULTIPLIER = {
+    "Memorial Day": 1.50,
+    "Independence Day": 1.40,
+    "Labor Day": 1.60,
+    "Black Friday": 3.00,
+    "Cyber Monday": 2.50,
+    "Holiday Season": 2.00,
+}
+
+
 def add_event_features(calendar: pd.DataFrame) -> pd.DataFrame:
     """
     Add event, pre-event, and post-event effects to the date calendar.
@@ -209,6 +248,7 @@ def add_event_features(calendar: pd.DataFrame) -> pd.DataFrame:
     calendar["event_name"] = "No Event"
     calendar["event_phase"] = "normal"
     calendar["base_event_multiplier"] = 1.00
+    calendar["marketing_event_multiplier"] = 1.00
 
     event_multipliers = {
         "Memorial Day": 1.25,
@@ -247,6 +287,9 @@ def add_event_features(calendar: pd.DataFrame) -> pd.DataFrame:
             calendar.loc[event_mask, "event_name"] = event_name
             calendar.loc[event_mask, "event_phase"] = "event"
             calendar.loc[event_mask, "base_event_multiplier"] = event_multipliers[event_name]
+            calendar.loc[event_mask, "marketing_event_multiplier"] = (
+                EVENT_MARKETING_MULTIPLIER[event_name]
+            )
 
             calendar.loc[post_mask, "event_name"] = event_name
             calendar.loc[post_mask, "event_phase"] = "post_event"
@@ -261,50 +304,284 @@ def add_event_features(calendar: pd.DataFrame) -> pd.DataFrame:
     calendar.loc[holiday_mask, "event_name"] = "Holiday Season"
     calendar.loc[holiday_mask, "event_phase"] = "event"
     calendar.loc[holiday_mask, "base_event_multiplier"] = 1.75
+    calendar.loc[holiday_mask, "marketing_event_multiplier"] = (
+        EVENT_MARKETING_MULTIPLIER["Holiday Season"]
+    )
 
     return calendar
 
 
-def generate_retail_data(
-    start_date: str = "2024-01-01",
-    end_date: str = "2025-12-31",
+# ---------------------------------------------------------------------------
+# Marketing spend
+# ---------------------------------------------------------------------------
+
+# Channel elasticities from the Nova Retail specification:
+# "10% increase in search spend -> 2% increase in units" => elasticity 0.20
+MARKETING_ELASTICITY = {
+    "search": 0.20,
+    "social": 0.08,
+    "display": 0.05,
+}
+EMAIL_LIFT = 0.15  # flat demand lift on days with an active email campaign
+
+CATEGORY_BASE_SPEND = {
+    # (search, social, display) daily base spend per region-category
+    "Electronics": (900, 400, 300),
+    "Fitness": (400, 250, 150),
+    "Home": (500, 260, 180),
+    "Outdoor": (350, 200, 140),
+}
+
+
+def create_marketing_table(
+    calendar: pd.DataFrame,
+    categories: list[str],
+    regions: list[str],
     random_seed: int = RANDOM_SEED,
 ) -> pd.DataFrame:
     """
-    Generate Nova Retail simulated data v1.
+    Generate daily marketing spend by (date, region, category).
 
-    Returns
-    -------
-    pd.DataFrame
-        Simulated retail data at date × store × sku × channel grain.
+    Marketing budgets are set at the region/category level (not per SKU),
+    matching how retail marketing teams actually allocate spend. Spend
+    scales up automatically during event windows via
+    `marketing_event_multiplier`.
     """
-    rng = np.random.default_rng(random_seed)
+    rng = np.random.default_rng(random_seed + 20)
 
-    sku_master = create_sku_master(random_seed=random_seed)
-    store_master = create_store_master()
-    calendar = create_date_calendar(start_date=start_date, end_date=end_date)
-    calendar = add_event_features(calendar)
+    cal = calendar[
+        ["date", "marketing_event_multiplier"]
+    ].copy()
+    cal["_key"] = 1
 
-    channels = pd.DataFrame(
-        {
-            "channel": ["Web", "App", "BOPIS", "Store"],
-            "channel_multiplier": [1.00, 0.85, 0.70, 1.15],
-        }
+    grid = pd.DataFrame(
+        [(r, c) for r in regions for c in categories],
+        columns=["region", "category"],
+    )
+    grid["_key"] = 1
+
+    table = cal.merge(grid, on="_key").drop(columns="_key")
+
+    base_spend = table["category"].map(
+        lambda c: CATEGORY_BASE_SPEND[c]
+    )
+    table["base_search_spend"] = base_spend.map(lambda t: t[0])
+    table["base_social_spend"] = base_spend.map(lambda t: t[1])
+    table["base_display_spend"] = base_spend.map(lambda t: t[2])
+
+    n = len(table)
+
+    for col in ["search", "social", "display"]:
+        noise = rng.lognormal(mean=0, sigma=0.15, size=n)
+        table[f"{col}_spend"] = (
+            table[f"base_{col}_spend"]
+            * table["marketing_event_multiplier"]
+            * noise
+        ).round(2)
+
+    # Email campaigns: ~12% of days, more likely during event windows.
+    email_prob = np.where(table["marketing_event_multiplier"] > 1.0, 0.35, 0.12)
+    table["email_flag"] = (rng.random(n) < email_prob).astype(int)
+
+    # Combined marketing demand multiplier (applied on top of price/promo
+    # effects). Uses base spend as the reference point for elasticity.
+    table["marketing_effect"] = (
+        (table["search_spend"] / table["base_search_spend"]) ** MARKETING_ELASTICITY["search"]
+        * (table["social_spend"] / table["base_social_spend"]) ** MARKETING_ELASTICITY["social"]
+        * (table["display_spend"] / table["base_display_spend"]) ** MARKETING_ELASTICITY["display"]
+        * (1 + table["email_flag"] * EMAIL_LIFT)
     )
 
-    # Cross join date × store × sku × channel
-    calendar["_key"] = 1
-    store_master["_key"] = 1
-    sku_master["_key"] = 1
-    channels["_key"] = 1
+    return table[
+        [
+            "date",
+            "region",
+            "category",
+            "search_spend",
+            "social_spend",
+            "display_spend",
+            "email_flag",
+            "marketing_effect",
+        ]
+    ]
 
+
+# ---------------------------------------------------------------------------
+# Promotions
+# ---------------------------------------------------------------------------
+
+PROMOTION_DEPTHS = np.array([0.00, 0.05, 0.10, 0.15, 0.20])
+
+# "10% promotion -> +18% demand" (on top of the pure price-elasticity effect
+# already captured by the lower selling price) => lift factor of 1.8 per
+# unit of depth, scaled by each product type's promo sensitivity.
+PROMO_LIFT_FACTOR = 1.8
+
+
+def create_promotion_table(
+    calendar: pd.DataFrame,
+    sku_master: pd.DataFrame,
+    random_seed: int = RANDOM_SEED,
+) -> pd.DataFrame:
+    """
+    Assign a promotion depth to every (date, sku) combination.
+
+    Promotions are more frequent for promo-sensitive product types and
+    during event windows, matching real markdown/promo calendars.
+    """
+    rng = np.random.default_rng(random_seed + 30)
+
+    cal = calendar[["date", "event_phase"]].copy()
+    cal["_key"] = 1
+
+    skus = sku_master[["sku", "promo_sensitivity"]].copy()
+    skus["_key"] = 1
+
+    table = cal.merge(skus, on="_key").drop(columns="_key")
+    n = len(table)
+
+    # Base probability of being on any promotion at all on a given day.
+    base_promo_prob = 0.10 + 0.10 * (table["promo_sensitivity"] - 0.5) / 1.1
+    event_boost = np.where(table["event_phase"] == "event", 1.8, 1.0)
+    promo_prob = np.clip(base_promo_prob * event_boost, 0, 0.85)
+
+    on_promo = rng.random(n) < promo_prob
+
+    # Deeper discounts more likely during event windows.
+    depth_weights_normal = np.array([0.55, 0.20, 0.15, 0.07, 0.03])
+    depth_weights_event = np.array([0.15, 0.20, 0.25, 0.22, 0.18])
+
+    depths = np.zeros(n)
+    is_event = (table["event_phase"] == "event").to_numpy()
+
+    depths[is_event] = rng.choice(
+        PROMOTION_DEPTHS, size=is_event.sum(), p=depth_weights_event
+    )
+    depths[~is_event] = rng.choice(
+        PROMOTION_DEPTHS, size=(~is_event).sum(), p=depth_weights_normal
+    )
+
+    table["promotion_depth"] = np.where(on_promo, depths, 0.0)
+    table["promotion_flag"] = (table["promotion_depth"] > 0).astype(int)
+
+    table["promo_lift"] = 1 + (
+        table["promotion_depth"] * PROMO_LIFT_FACTOR * table["promo_sensitivity"]
+    )
+
+    return table[["date", "sku", "promotion_depth", "promotion_flag", "promo_lift"]]
+
+
+# ---------------------------------------------------------------------------
+# Digital funnel
+# ---------------------------------------------------------------------------
+
+DIGITAL_CHANNELS = ("Web", "App", "BOPIS")
+
+CHANNEL_VIEWS_PER_SESSION = {
+    "Web": 4.5,
+    "App": 6.0,
+    "BOPIS": 3.5,
+}
+
+CHANNEL_BASE_CONVERSION = {
+    "Web": 0.028,
+    "App": 0.035,
+    "BOPIS": 0.05,
+}
+
+STOCK_STATUS_CONVERSION_MULTIPLIER = {
+    "In Stock": 1.00,
+    "Low Stock": 0.90,
+    "Limited Availability": 0.70,
+    "Out Of Stock": 0.15,
+}
+
+
+def add_digital_features(df: pd.DataFrame, random_seed: int = RANDOM_SEED) -> pd.DataFrame:
+    """
+    Derive session-level digital funnel metrics for digitally-influenced
+    channels (Web, App, BOPIS) from realized units, so the funnel is
+    internally consistent with actual sales instead of an independent,
+    disconnected random variable.
+
+    Physical Store channel rows get null digital metrics (no session
+    concept for walk-in traffic).
+    """
+    rng = np.random.default_rng(random_seed + 40)
+
+    df = df.copy()
+    is_digital = df["channel"].isin(DIGITAL_CHANNELS)
+
+    conversion_base = df["channel"].map(CHANNEL_BASE_CONVERSION).fillna(np.nan)
+    stock_multiplier = df["stock_status"].map(STOCK_STATUS_CONVERSION_MULTIPLIER).fillna(1.0)
+
+    conversion_noise = rng.lognormal(mean=0, sigma=0.12, size=len(df))
+    conversion_rate = (
+        conversion_base
+        * stock_multiplier
+        * df["marketing_effect"].clip(lower=0.5, upper=2.5) ** 0.3
+        * conversion_noise
+    ).clip(upper=0.35)
+
+    # Sessions implied by units and conversion rate, plus a small floor of
+    # "window shopping" traffic that never converts.
+    browsing_floor = rng.uniform(3, 15, size=len(df))
+    sessions = (df["units"] / conversion_rate.replace(0, np.nan)) + browsing_floor
+    sessions = sessions.round().fillna(0)
+
+    conversion_rate_realized = np.where(
+        sessions > 0, df["units"] / sessions, 0
+    )
+
+    views_per_session = df["channel"].map(CHANNEL_VIEWS_PER_SESSION).fillna(4.0)
+    page_views = (sessions * views_per_session * rng.uniform(0.85, 1.15, size=len(df))).round()
+
+    add_to_cart_rate = np.clip(
+        conversion_rate_realized * rng.uniform(1.8, 2.6, size=len(df)), 0, 0.9
+    )
+
+    df["sessions"] = np.where(is_digital, sessions, np.nan)
+    df["page_views"] = np.where(is_digital, page_views, np.nan)
+    df["conversion_rate"] = np.where(is_digital, conversion_rate_realized, np.nan)
+    df["add_to_cart_rate"] = np.where(is_digital, add_to_cart_rate, np.nan)
+
+    return df
+
+
+def _generate_chunk(
+    calendar_chunk: pd.DataFrame,
+    store_master: pd.DataFrame,
+    sku_master: pd.DataFrame,
+    channels: pd.DataFrame,
+    marketing_table: pd.DataFrame,
+    promotion_table: pd.DataFrame,
+    chunk_seed: int,
+) -> pd.DataFrame:
+    """
+    Run the full row-level generation pipeline for a single date-range
+    chunk (e.g. one month) and return the finished, dtype-optimized rows.
+
+    Generation is chunked by date so that peak memory during the
+    date x store x sku x channel cross-join and all downstream row-wise
+    math stays bounded (~100-150k rows per chunk) regardless of how many
+    total days/SKUs/stores the simulator is configured for. This mirrors
+    how the same workload would be partitioned in a Spark/Databricks
+    pipeline rather than materializing one monolithic in-memory table.
+    """
+    rng = np.random.default_rng(chunk_seed)
+
+    # Cross join date x store x sku x channel for this chunk only.
     df = (
-        calendar
-        .merge(store_master, on="_key")
-        .merge(sku_master, on="_key")
-        .merge(channels, on="_key")
-        .drop(columns="_key")
+        calendar_chunk
+        .merge(store_master, how="cross")
+        .merge(sku_master, how="cross")
+        .merge(channels, how="cross")
     )
+
+    # Bring in marketing spend (date x region x category) and promotions
+    # (date x sku).
+    df = df.merge(marketing_table, on=["date", "region", "category"], how="left")
+    df = df.merge(promotion_table, on=["date", "sku"], how="left")
 
     # Weekly pattern
     day_multipliers = {
@@ -330,14 +607,16 @@ def generate_retail_data(
     # Keep event multiplier from becoming negative during pre/post slumps
     df["event_multiplier"] = df["event_multiplier"].clip(lower=0.60)
 
-    # Add random price movement around base price
+    # Add random price movement around base price, then apply the
+    # promotion discount on top to get the final selling price.
     df["price_index"] = rng.normal(loc=1.0, scale=0.06, size=len(df))
     df["price_index"] = df["price_index"].clip(0.80, 1.20)
 
-    df["price"] = (df["base_price"] * df["price_index"]).round(2)
+    df["list_price"] = (df["base_price"] * df["price_index"]).round(2)
+    df["price"] = (df["list_price"] * (1 - df["promotion_depth"])).round(2)
 
-    # Price effect using log-log elasticity logic:
-    # demand_multiplier = (price / base_price) ^ elasticity
+    # Price effect using log-log elasticity logic on the *final* selling
+    # price, so promotional price cuts flow through true elasticity too.
     df["price_effect"] = (
         df["price"] / df["base_price"]
     ) ** df["true_price_elasticity"]
@@ -354,7 +633,8 @@ def generate_retail_data(
 
     df["region_multiplier"] = df["region"].map(region_multipliers)
 
-    # Expected demand
+    # Expected demand: price/promo/marketing effects are layered on top of
+    # the baseline seasonal/regional/channel pattern.
     df["expected_units"] = (
         df["base_daily_demand"]
         * df["channel_multiplier"]
@@ -362,6 +642,8 @@ def generate_retail_data(
         * df["region_multiplier"]
         * df["event_multiplier"]
         * df["price_effect"]
+        * df["promo_lift"]
+        * df["marketing_effect"]
         * df["noise"]
     )
 
@@ -454,6 +736,21 @@ def generate_retail_data(
     df["revenue"] = (df["units"] * df["price"]).round(2)
     df["gross_profit"] = (df["units"] * (df["price"] - df["cost"])).round(2)
 
+    # Digital funnel metrics (depends on final units + stock_status +
+    # marketing_effect, so must run after those are finalized).
+    df = add_digital_features(df, random_seed=chunk_seed)
+
+    # Operational capacity utilization: total units fulfilled per store per
+    # day, relative to that store's fulfillment capacity.
+    store_daily_units = (
+        df.groupby(["date", "store_id"])["units"]
+        .transform("sum")
+    )
+    df["fulfillment_capacity"] = df["store_capacity"]
+    df["capacity_utilization"] = (
+        store_daily_units / df["fulfillment_capacity"]
+    ).round(4)
+
     # Clean ordering
     selected_columns = [
         "date",
@@ -468,15 +765,25 @@ def generate_retail_data(
         "sku",
         "product_type",
         "base_price",
+        "list_price",
         "price",
         "cost",
         "true_price_elasticity",
         "seasonality_strength",
+        "promo_sensitivity",
         "base_daily_demand",
         "event_name",
         "event_phase",
         "base_event_multiplier",
         "event_multiplier",
+        "promotion_depth",
+        "promotion_flag",
+        "promo_lift",
+        "search_spend",
+        "social_spend",
+        "display_spend",
+        "email_flag",
+        "marketing_effect",
         "price_index",
         "price_effect",
         "expected_units",
@@ -491,25 +798,175 @@ def generate_retail_data(
         "stock_message",
         "stockout_flag",
         "lost_sales_flag",
+        "sessions",
+        "page_views",
+        "conversion_rate",
+        "add_to_cart_rate",
+        "store_capacity",
+        "fulfillment_capacity",
+        "labor_hours",
+        "bopis_capacity",
+        "capacity_utilization",
         "revenue",
         "gross_profit",
     ]
 
-    return df[selected_columns]
+    chunk_df = df[selected_columns]
+
+    try:
+        from utils import optimize_dtypes
+    except ImportError:  # running as a package (src.utils) rather than a script
+        from .utils import optimize_dtypes
+
+    return optimize_dtypes(chunk_df)
+
+
+def iter_retail_data_chunks(
+    start_date: str = "2024-01-01",
+    end_date: str = "2025-12-31",
+    random_seed: int = RANDOM_SEED,
+    verbose: bool = False,
+):
+    """
+    Generate the full Nova Retail simulated dataset (v3), one
+    calendar-month chunk at a time (see `_generate_chunk`).
+
+    This is a generator so callers can stream chunks straight to disk
+    (see the `__main__` block) instead of holding the full ~3M row / 55
+    column dataset in memory at once. Each yielded chunk is already
+    dtype-optimized (see `utils.optimize_dtypes`).
+
+    Yields
+    ------
+    pd.DataFrame
+        One month's worth of rows at date x store x sku x channel grain,
+        including commercial, promotional, marketing, digital, inventory,
+        and operational capacity variables.
+    """
+    sku_master = create_sku_master(random_seed=random_seed)
+    store_master = create_store_master(random_seed=random_seed)
+    calendar = create_date_calendar(start_date=start_date, end_date=end_date)
+    calendar = add_event_features(calendar)
+
+    categories = sorted(sku_master["category"].unique())
+    regions = sorted(store_master["region"].unique())
+
+    marketing_table = create_marketing_table(
+        calendar, categories, regions, random_seed=random_seed
+    )
+    promotion_table = create_promotion_table(
+        calendar, sku_master, random_seed=random_seed
+    )
+
+    channels = pd.DataFrame(
+        {
+            "channel": ["Web", "App", "BOPIS", "Store"],
+            "channel_multiplier": [1.00, 0.85, 0.70, 1.15],
+        }
+    )
+
+    month_starts = pd.period_range(
+        start=calendar["date"].min(), end=calendar["date"].max(), freq="M"
+    )
+
+    for i, period in enumerate(month_starts):
+        month_mask = (
+            (calendar["date"].dt.year == period.year)
+            & (calendar["date"].dt.month == period.month)
+        )
+        calendar_chunk = calendar.loc[month_mask].copy()
+
+        if calendar_chunk.empty:
+            continue
+
+        if verbose:
+            print(f"Generating {period} ({len(calendar_chunk)} days)...", flush=True)
+
+        chunk = _generate_chunk(
+            calendar_chunk=calendar_chunk,
+            store_master=store_master.drop(columns=["_key"], errors="ignore"),
+            sku_master=sku_master.drop(columns=["_key"], errors="ignore"),
+            channels=channels,
+            marketing_table=marketing_table,
+            promotion_table=promotion_table,
+            chunk_seed=random_seed + i,
+        )
+        yield chunk
+
+
+def generate_retail_data(
+    start_date: str = "2024-01-01",
+    end_date: str = "2025-12-31",
+    random_seed: int = RANDOM_SEED,
+    verbose: bool = False,
+) -> pd.DataFrame:
+    """
+    Generate the full Nova Retail simulated dataset (v3) as a single
+    in-memory DataFrame.
+
+    Convenience wrapper around `iter_retail_data_chunks` for small/medium
+    date ranges (e.g. notebook exploration on a few months of data). For
+    the full ~2 year / ~3M row dataset, prefer running this module as a
+    script, which streams chunks straight to CSV instead of holding
+    everything in memory at once.
+    """
+    chunks = list(
+        iter_retail_data_chunks(
+            start_date=start_date,
+            end_date=end_date,
+            random_seed=random_seed,
+            verbose=verbose,
+        )
+    )
+    return pd.concat(chunks, ignore_index=True)
 
 
 if __name__ == "__main__":
-    output_path = (
-        "01-retail-pricing-optimization/"
-        "data/simulated/nova_retail_simulated_data_v2_inventory.csv"
+    import argparse
+    import time
+
+    parser = argparse.ArgumentParser(
+        description="Generate Nova Retail simulated data, streaming chunks to CSV."
     )
+    parser.add_argument("--start", default="2024-01-01", help="Start date (YYYY-MM-DD)")
+    parser.add_argument("--end", default="2025-12-31", help="End date (YYYY-MM-DD)")
+    parser.add_argument(
+        "--mode",
+        default="w",
+        choices=["w", "a"],
+        help="'w' to start a fresh file, 'a' to append to an existing one "
+        "(useful for generating a large date range across multiple runs).",
+    )
+    parser.add_argument(
+        "--output",
+        default=(
+            "01-retail-pricing-optimization/"
+            "data/simulated/nova_retail_simulated_data_v3_full.csv"
+        ),
+    )
+    args = parser.parse_args()
 
-    retail_df = generate_retail_data()
-    retail_df.to_csv(output_path, index=False)
+    start = time.time()
+    total_rows = 0
 
-    print("Nova Retail simulated dataset with inventory created.")
-    print(f"Rows: {len(retail_df):,}")
-    print(f"Columns: {len(retail_df.columns):,}")
+    for i, chunk in enumerate(
+        iter_retail_data_chunks(start_date=args.start, end_date=args.end, verbose=True)
+    ):
+        is_first_write = (args.mode == "w") and (i == 0)
+        chunk.to_csv(
+            args.output,
+            mode="w" if is_first_write else "a",
+            header=is_first_write,
+            index=False,
+        )
+        total_rows += len(chunk)
+        print(
+            f"  -> wrote {len(chunk):,} rows "
+            f"(running total {total_rows:,}, {time.time() - start:,.1f}s elapsed)",
+            flush=True,
+        )
 
-    print(f"Output: {output_path}")
-    print(retail_df.head())
+    print(f"Nova Retail simulated dataset chunk range [{args.start}, {args.end}] done.")
+    print(f"Total rows written this run: {total_rows:,}")
+    print(f"Output: {args.output}")
+    print(f"Elapsed: {time.time() - start:,.1f}s")

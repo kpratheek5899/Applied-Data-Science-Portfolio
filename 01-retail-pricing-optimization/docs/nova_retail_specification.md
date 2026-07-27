@@ -345,7 +345,7 @@ Stores receive inventory every 7 days.
 Target inventory:
 
 ```text
-80% of maximum capacity
+60% of maximum capacity
 ```
 
 ---
