@@ -20,11 +20,15 @@ Living checklist for `01-retail-pricing-optimization/`. Updated and committed af
 
 Result: full model (FE + controls) recovers true elasticity within 0.2-2.8% for all four product types (R² 0.67-0.89). See notebook 03 for the full naive → FE → FE+controls comparison, diagnostics, and the small-cluster CI caveat.
 
-## Phase 3 — Bayesian Demand Modeling ⏸️ NOT STARTED
+## Phase 3 — Bayesian Demand Modeling ✅ DONE
 
-- [ ] PyMC Bayesian linear regression
-- [ ] Posterior distributions and credible intervals
-- [ ] Hierarchical pooling (SKU-level elasticity toward category-level)
+- [x] PyMC Bayesian hierarchical linear regression (NUTS, non-centered parameterization)
+- [x] Posterior distributions and credible intervals (SKU- and product-type-level)
+- [x] Hierarchical pooling (SKU-level elasticity toward product-type-level)
+- [x] Implement in `src/modeling.py` (`prepare_bayesian_data`, `build_hierarchical_model`, `fit_bayesian_model`, `summarize_bayesian_elasticity`)
+- [x] `notebooks/04_bayesian_elasticity_modeling.ipynb` with real executed outputs
+
+Result: recovers true elasticity within ~2-11% per product type (Commodity 1.9%, Promo Sensitive 1.1%, Seasonal 4.1%, Premium 11.0%), clean convergence (r-hat 1.00, ess_bulk 3000+, zero divergences). Two real bugs found and fixed along the way (both documented in the notebook): (1) date-SKU aggregation destroyed the row-level price variation needed for identification, fixed via row-level random subsampling; (2) a promotion-depth coefficient shared across product types misattributed type-specific promo lift into price elasticity, fixed by letting it vary by product type. Fitting takes ~15 min (no C compiler on this machine for PyTensor) — the notebook loads a cached posterior from `data/processed/phase3_idata.pkl` rather than refitting live.
 
 ## Phase 4 — Price Optimization ⏸️ NOT STARTED
 
