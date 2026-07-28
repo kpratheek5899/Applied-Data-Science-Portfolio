@@ -39,20 +39,44 @@ Result: recovers true elasticity within ~2-11% per product type (Commodity 1.9%,
 
 Result: revenue(price) is a pure monomial under constant elasticity (clean GP problem), but profit(price) is a monomial minus a monomial (a signomial, not DCP/DGP-representable) — so `optimize_price` uses grid search as one general mechanism for all three objectives (which also produces the exact data Phase 5's price-response chart needs), and `optimize_price_gp` demonstrates/validates the true GP solution for revenue specifically. Validated on both synthetic elastic/inelastic cases and a real SKU from the dataset.
 
-## Phase 5 — Streamlit Decision-Support App ⏸️ NOT STARTED
+## Phase 5 — Streamlit Decision-Support App 🔄 IN PROGRESS
 
-- [ ] `src/data_loader.py`
+Revised scope (see plan `crystalline-splashing-lecun.md`): presets are prefills only, closed-loop Decision Replay, Bayesian risk-aware optimization, custom date-range selection. Must run as a self-contained, deployable simulation (Streamlit Community Cloud) for portfolio/LinkedIn demo purposes — no live dependency on the 970MB dataset, Bayesian refitting, or `pymc`/`cvxpy` at runtime.
+
+### 5a — Data layer ✅ DONE
+
+- [x] `scripts/build_app_data.py` (offline precompute, not part of the live app)
+- [x] `data/app/sku_master.csv` (50 rows, no ground-truth columns)
+- [x] `data/app/daily_sku_timeseries.csv` (36,550 rows, full 2024-01-01 to 2025-12-31 coverage; carries `true_price_elasticity` as the one deliberate, clearly-scoped ground-truth column for Decision Replay's outcome realization only)
+- [x] `data/app/posterior_samples.csv` (15,000 rows, 300 thinned draws/SKU)
+- [x] `src/data_loader.py`
+- [x] `tests/test_data_loader.py` (12 tests: no nulls, full date coverage, no ground-truth leakage into sku_master, inventory identity, elasticity fallback logic, posterior draw counts) — all passing
+
+### 5b — Scenario Explorer (point-estimate) ⏸️ NOT STARTED
+
 - [ ] `src/demand_model.py`
-- [ ] `src/optimizer.py`
-- [ ] `src/scenario_engine.py` (predefined scenarios: overstock, holiday surge, shortage, slow-mover, high/low elasticity)
-- [ ] `src/explanations.py` (plain-English recommendation rationale)
+- [ ] `src/scenario_engine.py` (presets as prefills only, single date + custom date range)
+- [ ] `src/explanations.py`
 - [ ] `src/metrics.py`
-- [ ] `app.py` — user-defined scenario mode, objective selection, before/after comparison
-- [ ] Price-response visualization
-- [ ] Decision Replay mode
-- [ ] `tests/test_optimizer.py`
+- [ ] `app/streamlit_app.py` landing page + `app/pages/1_Scenario_Explorer.py`
 - [ ] `tests/test_scenarios.py`
-- [ ] Landing page framing (synthetic data disclosure, methodology summary)
+
+### 5c — Bayesian risk-aware optimization ⏸️ NOT STARTED
+
+- [ ] `optimize_price_bayesian` in `src/optimization.py` (posterior draws + risk-aversion slider)
+- [ ] Fan/percentile chart of outcomes at recommended price
+
+### 5d — Closed-loop Decision Replay ⏸️ NOT STARTED
+
+- [ ] `src/replay_engine.py` (`realize_true_outcome`, `run_closed_loop_replay`)
+- [ ] `app/pages/2_Decision_Replay.py`
+- [ ] `tests/test_replay_engine.py`
+
+### 5e — Polish + deployment ⏸️ NOT STARTED
+
+- [ ] Landing page copy (retrospective/counterfactual framing, synthetic-data disclosure)
+- [ ] `01-retail-pricing-optimization/requirements.txt` (clean, deployment-scoped)
+- [ ] Streamlit Community Cloud deployment instructions
 
 ## Outstanding / Low Priority
 
