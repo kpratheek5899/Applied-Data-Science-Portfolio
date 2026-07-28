@@ -30,11 +30,14 @@ Result: full model (FE + controls) recovers true elasticity within 0.2-2.8% for 
 
 Result: recovers true elasticity within ~2-11% per product type (Commodity 1.9%, Promo Sensitive 1.1%, Seasonal 4.1%, Premium 11.0%), clean convergence (r-hat 1.00, ess_bulk 3000+, zero divergences). Two real bugs found and fixed along the way (both documented in the notebook): (1) date-SKU aggregation destroyed the row-level price variation needed for identification, fixed via row-level random subsampling; (2) a promotion-depth coefficient shared across product types misattributed type-specific promo lift into price elasticity, fixed by letting it vary by product type. Fitting takes ~15 min (no C compiler on this machine for PyTensor) — the notebook loads a cached posterior from `data/processed/phase3_idata.pkl` rather than refitting live.
 
-## Phase 4 — Price Optimization ⏸️ NOT STARTED
+## Phase 4 — Price Optimization ✅ DONE
 
-- [ ] `src/optimization.py` with cvxpy
-- [ ] Objectives: max profit, max revenue, protect inventory
-- [ ] Constraints: minimum margin, inventory, price bounds
+- [x] `src/optimization.py` (grid search over the constant-elasticity demand curve + a cvxpy geometric-programming solver for revenue, used to cross-validate the grid search)
+- [x] Objectives: max profit, max revenue, protect inventory
+- [x] Constraints: minimum margin, inventory, price bounds, max %-change
+- [x] `tests/test_optimizer.py` (13 tests: bounds, margin, inventory feasibility, internal consistency, objective divergence, elasticity sensitivity, inventory-protection vs profit ordering, overstock/shortage scenarios, grid-vs-GP cross-check) — all passing
+
+Result: revenue(price) is a pure monomial under constant elasticity (clean GP problem), but profit(price) is a monomial minus a monomial (a signomial, not DCP/DGP-representable) — so `optimize_price` uses grid search as one general mechanism for all three objectives (which also produces the exact data Phase 5's price-response chart needs), and `optimize_price_gp` demonstrates/validates the true GP solution for revenue specifically. Validated on both synthetic elastic/inelastic cases and a real SKU from the dataset.
 
 ## Phase 5 — Streamlit Decision-Support App ⏸️ NOT STARTED
 
