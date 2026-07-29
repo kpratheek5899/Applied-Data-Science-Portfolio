@@ -75,11 +75,14 @@ Result: all 6 presets and manual/date-range mode run end-to-end through one shar
 
 Result: all three objectives now use the mean across ~300 posterior draws instead of a point estimate; `protect_inventory` keeps 5b's deterministic hard floor (computed from the posterior mean), while `maximize_profit`/`maximize_revenue` subtract `risk_aversion × P(stockout) × (target's own range on the grid)` — the range normalization keeps the 0–1 slider meaningfully comparable across differently-scaled SKUs. 49/49 tests passing across the full suite. One real finding while testing: risk_aversion only has room to act when the *unconstrained* profit-optimal price both sits inside the allowed price-change band and carries genuine stockout risk there — a real economic property (elastic goods pushed to a binding price-change ceiling already get whatever inventory protection higher pricing provides "for free"), not a bug, but it made the naive test scenario a poor showcase, which is what surfaced the missing inventory-override control.
 
-### 5d — Closed-loop Decision Replay ⏸️ NOT STARTED
+### 5d — Closed-loop Decision Replay ✅ DONE
 
-- [ ] `src/replay_engine.py` (`realize_true_outcome`, `run_closed_loop_replay`)
-- [ ] `app/pages/2_Decision_Replay.py`
-- [ ] `tests/test_replay_engine.py`
+- [x] `src/replay_engine.py` (`realize_true_outcome` — the only function in the codebase allowed to read `true_price_elasticity` — and `run_closed_loop_replay`)
+- [x] `app/pages/2_Decision_Replay.py` (SKU/date/window picker, step-through-days control, parallel cumulative profit + inventory trajectories, explicit UI note on why the closed loop only works because Nova Retail is synthetic)
+- [x] Landing page nav link added
+- [x] `tests/test_replay_engine.py` (11 tests) + `tests/test_app_pages.py` +3 tests
+
+Result: two trajectories per SKU/window, both starting from the same actual Day-1 inventory — "actual" is a pure passthrough of history, "optimizer" recommends each day's price from the estimated model (same decision path as Scenario Explorer) and realizes the outcome via the true simulator model, with Day-(N+1) starting inventory coming from Day-N's own optimizer decision, not the next fixed historical row. 63/63 tests passing across the full suite. Two real bugs found and fixed while building, not just tuned away: (1) an initial replenishment rule added back the *absolute amount* the real network consumed each day, which let the optimizer trajectory's inventory drift upward without bound whenever its policy sold less than history (e.g. under `protect_inventory`) — fixed to replenish toward the same bounded *target level* the real network was refilled to, matching how `src/data_generation.py`'s simulator actually replenishes (target-based, not consumption-based); (2) the window-length and start-date controls could combine to overflow past the dataset's last date — an initial fix just caught this after the fact with `st.error`/`st.stop()`, but the real fix (per explicit user feedback) makes it structurally impossible: the start-date picker's own `max_value` is derived from whichever window length is currently selected (read before the date widget in script order, independent of visual column layout), with the persisted value proactively clamped in `st.session_state` when the window grows — confirmed via `AppTest` that widening the window mid-session clamps the date silently with zero errors and zero exceptions, rather than requiring the user to notice and fix an invalid combination themselves.
 
 ### 5e — Polish + deployment ⏸️ NOT STARTED
 

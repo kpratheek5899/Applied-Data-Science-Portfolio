@@ -96,6 +96,7 @@ st.markdown(
 )
 
 st.page_link("pages/1_Scenario_Explorer.py", label="→ Scenario Explorer", icon="🎛️")
+st.page_link("pages/2_Decision_Replay.py", label="→ Decision Replay", icon="🔁")
 
 st.caption(
     "Nova Retail is a portfolio project demonstrating a complete applied decision-science "
