@@ -52,14 +52,17 @@ Revised scope (see plan `crystalline-splashing-lecun.md`): presets are prefills 
 - [x] `src/data_loader.py`
 - [x] `tests/test_data_loader.py` (12 tests: no nulls, full date coverage, no ground-truth leakage into sku_master, inventory identity, elasticity fallback logic, posterior draw counts) — all passing
 
-### 5b — Scenario Explorer (point-estimate) ⏸️ NOT STARTED
+### 5b — Scenario Explorer (point-estimate) ✅ DONE
 
-- [ ] `src/demand_model.py`
-- [ ] `src/scenario_engine.py` (presets as prefills only, single date + custom date range)
-- [ ] `src/explanations.py`
-- [ ] `src/metrics.py`
-- [ ] `app/streamlit_app.py` landing page + `app/pages/1_Scenario_Explorer.py`
-- [ ] `tests/test_scenarios.py`
+- [x] `src/demand_model.py`
+- [x] `src/scenario_engine.py` (presets as prefills only, single date + custom date range)
+- [x] `src/explanations.py`
+- [x] `src/metrics.py`
+- [x] `app/streamlit_app.py` landing page + `app/pages/1_Scenario_Explorer.py`
+- [x] `optimize_price_multi_day` / `multi_day_price_response_curve` added to `src/optimization.py` (existing single-day functions/tests untouched)
+- [x] `tests/test_scenarios.py` (11 tests) + `tests/test_app_pages.py` (5 tests, via Streamlit's own `AppTest` headless runner)
+
+Result: all 6 presets and manual/date-range mode run end-to-end through one shared code path (`Scenario` → `build_demand_context` → `recommend_price`), verified with `AppTest` (not just unit tests of internal functions) — this caught and fixed a real pandas dtype bug (assigning formatted currency strings into a float64 column) that unit tests alone wouldn't have surfaced. 41/41 tests passing across the full suite.
 
 ### 5c — Bayesian risk-aware optimization ⏸️ NOT STARTED
 

@@ -121,6 +121,17 @@ def build_daily_sku_timeseries(df: pd.DataFrame) -> pd.DataFrame:
         _mean_price=("price", "mean"),
     ).reset_index()
 
+    # src/data_generation.py's event windows overlap (Black Friday's event
+    # window runs through Dec 1, Cyber Monday's starts Nov 28), and because
+    # events are applied in a fixed dict order with Cyber Monday last, its
+    # label silently overwrites Black Friday's on the shared days. Rather
+    # than touch the committed simulator (which would require regenerating
+    # the full dataset and invalidating every already-fitted Phase 2-4
+    # model), relabel it here for app-facing display -- "Black Friday Cyber
+    # Monday" is standard retail terminology for the combined weekend
+    # anyway, so this is a legitimate label, not just a patch.
+    daily["event_name"] = daily["event_name"].astype(str).replace("Cyber Monday", "Black Friday Cyber Monday")
+
     # Units-weighted average price, falling back to a simple mean on days
     # with zero network-wide units (avoids a division by zero).
     daily["actual_price"] = np.where(

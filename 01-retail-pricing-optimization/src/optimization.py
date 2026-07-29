@@ -278,3 +278,144 @@ def optimize_price_gp(
     problem.solve(gp=True)
 
     return float(p.value)
+
+
+# ---------------------------------------------------------------------------
+# Multi-day (date-range) aggregation -- Phase 5's "hold one price constant
+# across a whole window" mode. Each day is anchored at its own realized
+# (price, units) rather than a single shared baseline, since day-of-week,
+# event, and promo conditions genuinely differ day to day; a single shared
+# candidate price is then evaluated against the *sum* across days. Kept
+# separate from `optimize_price` (existing tests/callers untouched) rather
+# than overloading its scalar-baseline signature.
+# ---------------------------------------------------------------------------
+
+
+def multi_day_price_response_curve(
+    day_base_prices,
+    day_base_units,
+    cost: float,
+    elasticity: float,
+    price_low: float,
+    price_high: float,
+    n_points: int = 400,
+) -> pd.DataFrame:
+    """
+    Sum of daily constant-elasticity demand curves, each day anchored at its
+    own realized (price, units), evaluated at one shared candidate price
+    per grid point.
+    """
+    day_base_prices = np.asarray(day_base_prices, dtype=float)
+    day_base_units = np.asarray(day_base_units, dtype=float)
+    if len(day_base_prices) != len(day_base_units):
+        raise ValueError("day_base_prices and day_base_units must be the same length")
+
+    prices = np.linspace(price_low, price_high, n_points)
+    # units_per_day[i, j] = units on day j at candidate price prices[i]
+    units_per_day = day_base_units[None, :] * (prices[:, None] / day_base_prices[None, :]) ** elasticity
+    total_units = units_per_day.sum(axis=1)
+
+    revenue = prices * total_units
+    profit = (prices - cost) * total_units
+    margin_pct = (prices - cost) / prices
+
+    return pd.DataFrame(
+        {"price": prices, "units": total_units, "revenue": revenue, "profit": profit, "margin_pct": margin_pct}
+    )
+
+
+def optimize_price_multi_day(
+    objective: str,
+    day_base_prices,
+    day_base_units,
+    cost: float,
+    elasticity: float,
+    inventory: float | None = None,
+    price_min: float | None = None,
+    price_max: float | None = None,
+    min_margin: float | None = None,
+    max_price_change_pct: float | None = None,
+    n_points: int = 400,
+) -> dict:
+    """
+    Recommend one price held constant across every day in a range, per
+    Phase 5's custom date-range mode. Bounds are resolved against the
+    window's mean historical price as the reference "current price".
+
+    Unlike `optimize_price`, "protect_inventory" here has no closed-form
+    floor (summed multi-day demand isn't a single power law with a clean
+    inverse), so it filters the evaluated grid for prices where total units
+    stay within `inventory` and maximizes profit among those -- falling
+    back to the highest grid price if even the ceiling doesn't fit.
+    """
+    if objective not in OBJECTIVES:
+        raise ValueError(f"objective must be one of {OBJECTIVES}, got {objective!r}")
+    if elasticity >= 0:
+        raise ValueError(f"elasticity must be negative (a valid demand curve), got {elasticity}")
+
+    day_base_prices = np.asarray(day_base_prices, dtype=float)
+    day_base_units = np.asarray(day_base_units, dtype=float)
+    reference_price = float(day_base_prices.mean())
+
+    bounds = resolve_price_bounds(
+        base_price=reference_price,
+        cost=cost,
+        price_min=price_min,
+        price_max=price_max,
+        min_margin=min_margin,
+        max_price_change_pct=max_price_change_pct,
+    )
+
+    curve = multi_day_price_response_curve(
+        day_base_prices, day_base_units, cost, elasticity, bounds.low, bounds.high, n_points=n_points
+    )
+
+    if objective == "protect_inventory" and inventory is not None:
+        feasible = curve[curve["units"] <= inventory]
+        candidates = feasible if not feasible.empty else curve.iloc[[-1]]
+        best = candidates.loc[candidates["profit"].idxmax()]
+    else:
+        target_col = "revenue" if objective == "maximize_revenue" else "profit"
+        best = curve.loc[curve[target_col].idxmax()]
+
+    current_units = float(day_base_units.sum())
+    current_revenue = float((day_base_prices * day_base_units).sum())
+    current_profit = float(((day_base_prices - cost) * day_base_units).sum())
+    current_margin_pct = float(((day_base_prices - cost) / day_base_prices * day_base_units).sum() / current_units)
+
+    recommended_price = float(best["price"])
+    recommended_units = float(best["units"])
+    recommended_revenue = float(best["revenue"])
+    recommended_profit = float(best["profit"])
+
+    ending_inventory = (inventory - recommended_units) if inventory is not None else None
+    sell_through_rate = (recommended_units / inventory) if inventory else None
+    stockout_risk = bool(inventory is not None and recommended_units >= inventory)
+
+    return {
+        "objective": objective,
+        "recommended_price": recommended_price,
+        "current_price": reference_price,
+        "price_change_pct": (recommended_price - reference_price) / reference_price * 100,
+        "expected_units": recommended_units,
+        "current_units": current_units,
+        "units_change_pct": (recommended_units - current_units) / current_units * 100,
+        "revenue": recommended_revenue,
+        "current_revenue": current_revenue,
+        "revenue_change_pct": (recommended_revenue - current_revenue) / current_revenue * 100,
+        "profit": recommended_profit,
+        "current_profit": current_profit,
+        "profit_change_pct": (
+            (recommended_profit - current_profit) / abs(current_profit) * 100
+            if current_profit != 0
+            else float("nan")
+        ),
+        "margin_pct": float(best["margin_pct"]),
+        "current_margin_pct": current_margin_pct,
+        "ending_inventory": ending_inventory,
+        "sell_through_rate": sell_through_rate,
+        "stockout_risk": stockout_risk,
+        "price_bounds": (bounds.low, bounds.high),
+        "curve": curve,
+        "n_days": len(day_base_prices),
+    }
