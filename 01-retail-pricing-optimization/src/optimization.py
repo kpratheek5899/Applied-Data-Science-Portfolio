@@ -419,3 +419,178 @@ def optimize_price_multi_day(
         "curve": curve,
         "n_days": len(day_base_prices),
     }
+
+
+# ---------------------------------------------------------------------------
+# Bayesian / risk-aware optimization -- Phase 5c. Uses Phase 3's posterior
+# draws of elasticity instead of a single point estimate, so each candidate
+# price gets a *distribution* of possible outcomes (not one number), and a
+# user-adjustable risk_aversion slider can trade expected profit/revenue
+# against stockout probability. Takes day-array inputs unconditionally (a
+# single day is just a length-1 array) so one function covers both the
+# single-day and date-range cases `optimize_price`/`optimize_price_multi_day`
+# needed two functions for.
+# ---------------------------------------------------------------------------
+
+
+def optimize_price_bayesian(
+    objective: str,
+    day_base_prices,
+    day_base_units,
+    cost: float,
+    elasticity_samples,
+    inventory: float | None = None,
+    risk_aversion: float = 0.0,
+    price_min: float | None = None,
+    price_max: float | None = None,
+    min_margin: float | None = None,
+    max_price_change_pct: float | None = None,
+    n_points: int = 400,
+) -> dict:
+    """
+    Recommend a price using the full posterior over elasticity rather than
+    its point estimate.
+
+    For "maximize_profit" / "maximize_revenue": the target metric (mean
+    profit or mean revenue across draws) is penalized by
+    `risk_aversion * P(stockout) * (target's own range on the grid)` --
+    normalizing the penalty by the target's range keeps `risk_aversion` a
+    scale-free 0-1 dial regardless of a SKU's price/volume scale, rather
+    than a raw dollar coefficient a user would have to calibrate per SKU.
+
+    For "protect_inventory": reuses the same hard inventory-floor logic as
+    `optimize_price`/`optimize_price_multi_day` (computed from the
+    posterior *mean* elasticity, keeping that guarantee deterministic),
+    then maximizes mean profit across draws within that safe region --
+    `risk_aversion` has no additional effect here since the floor already
+    handles inventory risk directly.
+
+    Returns the same keys as `optimize_price_multi_day`, plus
+    `profit_p10`/`profit_p50`/`profit_p90` (and the same for revenue and
+    units) describing the distribution of outcomes at the recommended price
+    -- the data a "fan chart" needs.
+    """
+    if objective not in OBJECTIVES:
+        raise ValueError(f"objective must be one of {OBJECTIVES}, got {objective!r}")
+
+    day_base_prices = np.asarray(day_base_prices, dtype=float)
+    day_base_units = np.asarray(day_base_units, dtype=float)
+    elasticity_samples = np.asarray(elasticity_samples, dtype=float)
+    if (elasticity_samples >= 0).any():
+        raise ValueError("all elasticity samples must be negative (a valid demand curve)")
+
+    reference_price = float(day_base_prices.mean())
+    mean_elasticity = float(elasticity_samples.mean())
+
+    inventory_floor = None
+    if objective == "protect_inventory" and inventory is not None:
+        # Same closed-form floor as the single-day case, applied to the sum
+        # of day-level baselines at the posterior mean elasticity.
+        total_base_units = float(day_base_units.sum())
+        if inventory < total_base_units:
+            inventory_floor = reference_price * (inventory / total_base_units) ** (1.0 / mean_elasticity)
+
+    bounds = resolve_price_bounds(
+        base_price=reference_price,
+        cost=cost,
+        price_min=price_min,
+        price_max=price_max,
+        min_margin=min_margin,
+        max_price_change_pct=max_price_change_pct,
+        inventory_floor_price=inventory_floor,
+    )
+
+    prices = np.linspace(bounds.low, bounds.high, n_points)
+
+    # units_per_draw[i, k] = total units summed across days, at prices[i],
+    # under posterior draw k.
+    ratio = prices[:, None, None] / day_base_prices[None, :, None]  # (n_points, n_days, 1)
+    power = ratio ** elasticity_samples[None, None, :]  # (n_points, n_days, n_draws)
+    units_per_draw = (day_base_units[None, :, None] * power).sum(axis=1)  # (n_points, n_draws)
+
+    revenue_per_draw = prices[:, None] * units_per_draw
+    profit_per_draw = (prices[:, None] - cost) * units_per_draw
+
+    mean_units = units_per_draw.mean(axis=1)
+    mean_revenue = revenue_per_draw.mean(axis=1)
+    mean_profit = profit_per_draw.mean(axis=1)
+    stockout_prob = (units_per_draw >= inventory).mean(axis=1) if inventory is not None else np.zeros(n_points)
+
+    if objective == "protect_inventory":
+        if inventory is not None:
+            feasible_idx = np.where(mean_units <= inventory)[0]
+            candidate_idx = feasible_idx if len(feasible_idx) > 0 else np.array([n_points - 1])
+        else:
+            candidate_idx = np.arange(n_points)
+        best_i = candidate_idx[np.argmax(mean_profit[candidate_idx])]
+    else:
+        target = mean_revenue if objective == "maximize_revenue" else mean_profit
+        target_range = float(target.max() - target.min())
+        score = target - risk_aversion * stockout_prob * target_range
+        best_i = int(np.argmax(score))
+
+    current_units = float(day_base_units.sum())
+    current_revenue = float((day_base_prices * day_base_units).sum())
+    current_profit = float(((day_base_prices - cost) * day_base_units).sum())
+    current_margin_pct = float(((day_base_prices - cost) / day_base_prices * day_base_units).sum() / current_units)
+
+    recommended_price = float(prices[best_i])
+    recommended_units = float(mean_units[best_i])
+    recommended_revenue = float(mean_revenue[best_i])
+    recommended_profit = float(mean_profit[best_i])
+    recommended_margin_pct = (recommended_price - cost) / recommended_price
+
+    ending_inventory = (inventory - recommended_units) if inventory is not None else None
+    sell_through_rate = (recommended_units / inventory) if inventory else None
+    stockout_risk_prob = float(stockout_prob[best_i])
+
+    curve = pd.DataFrame(
+        {
+            "price": prices,
+            "units": mean_units,
+            "revenue": mean_revenue,
+            "profit": mean_profit,
+            "margin_pct": (prices - cost) / prices,
+            "stockout_prob": stockout_prob,
+        }
+    )
+
+    def _percentiles(arr_per_draw, i):
+        return {
+            "p10": float(np.percentile(arr_per_draw[i, :], 10)),
+            "p50": float(np.percentile(arr_per_draw[i, :], 50)),
+            "p90": float(np.percentile(arr_per_draw[i, :], 90)),
+        }
+
+    return {
+        "objective": objective,
+        "recommended_price": recommended_price,
+        "current_price": reference_price,
+        "price_change_pct": (recommended_price - reference_price) / reference_price * 100,
+        "expected_units": recommended_units,
+        "current_units": current_units,
+        "units_change_pct": (recommended_units - current_units) / current_units * 100,
+        "revenue": recommended_revenue,
+        "current_revenue": current_revenue,
+        "revenue_change_pct": (recommended_revenue - current_revenue) / current_revenue * 100,
+        "profit": recommended_profit,
+        "current_profit": current_profit,
+        "profit_change_pct": (
+            (recommended_profit - current_profit) / abs(current_profit) * 100
+            if current_profit != 0
+            else float("nan")
+        ),
+        "margin_pct": recommended_margin_pct,
+        "current_margin_pct": current_margin_pct,
+        "ending_inventory": ending_inventory,
+        "sell_through_rate": sell_through_rate,
+        "stockout_risk": stockout_risk_prob > 0.05,
+        "stockout_probability": stockout_risk_prob,
+        "price_bounds": (bounds.low, bounds.high),
+        "curve": curve,
+        "n_days": len(day_base_prices),
+        "risk_aversion": risk_aversion,
+        "units_distribution": _percentiles(units_per_draw, best_i),
+        "revenue_distribution": _percentiles(revenue_per_draw, best_i),
+        "profit_distribution": _percentiles(profit_per_draw, best_i),
+    }

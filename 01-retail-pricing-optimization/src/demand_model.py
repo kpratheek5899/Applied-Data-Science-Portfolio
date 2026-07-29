@@ -19,7 +19,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 from data_loader import resolve_elasticity
-from optimization import optimize_price, optimize_price_multi_day
+from optimization import optimize_price, optimize_price_multi_day, optimize_price_bayesian
 
 
 @dataclass
@@ -138,6 +138,43 @@ def recommend_price(
         cost=context.cost,
         elasticity=context.elasticity,
         inventory=inventory,
+        price_min=price_min,
+        price_max=price_max,
+        min_margin=min_margin,
+        max_price_change_pct=max_price_change_pct,
+        n_points=n_points,
+    )
+
+
+def recommend_price_bayesian(
+    context: DemandContext,
+    objective: str,
+    elasticity_samples,
+    risk_aversion: float = 0.0,
+    inventory: float | None = None,
+    price_min: float | None = None,
+    price_max: float | None = None,
+    min_margin: float | None = None,
+    max_price_change_pct: float | None = None,
+    n_points: int = 400,
+) -> dict:
+    """
+    Same as `recommend_price`, but using the full posterior over elasticity
+    (`elasticity_samples`, from `data_loader.get_elasticity_samples`) instead
+    of the point estimate in `context.elasticity` -- Phase 5c. Works
+    uniformly for single-day and multi-day contexts (unlike `recommend_price`,
+    which dispatches to two different `optimization.py` functions).
+    """
+    inventory = inventory if inventory is not None else context.starting_inventory
+
+    return optimize_price_bayesian(
+        objective,
+        day_base_prices=context.day_prices,
+        day_base_units=context.day_units,
+        cost=context.cost,
+        elasticity_samples=elasticity_samples,
+        inventory=inventory,
+        risk_aversion=risk_aversion,
         price_min=price_min,
         price_max=price_max,
         min_margin=min_margin,

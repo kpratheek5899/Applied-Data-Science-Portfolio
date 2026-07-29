@@ -20,9 +20,15 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
-from data_loader import load_sku_master, load_daily_timeseries, get_date_bounds
+from data_loader import (
+    load_sku_master,
+    load_daily_timeseries,
+    load_posterior_samples,
+    get_date_bounds,
+    get_elasticity_samples,
+)
 from scenario_engine import build_predefined_scenarios, build_manual_scenario
-from demand_model import build_demand_context, recommend_price
+from demand_model import build_demand_context, recommend_price, recommend_price_bayesian
 from explanations import generate_explanation
 from metrics import before_after_table, risk_tier, scenario_summary_line, format_currency, format_pct
 
@@ -43,10 +49,10 @@ COLOR_FEASIBLE_BAND = "#cde2fb"  # sequential step 100
 
 @st.cache_data
 def _load_data():
-    return load_sku_master(), load_daily_timeseries()
+    return load_sku_master(), load_daily_timeseries(), load_posterior_samples()
 
 
-sku_master, daily = _load_data()
+sku_master, daily, posterior_samples = _load_data()
 date_lo, date_hi = get_date_bounds(daily)
 sku_options = sorted(sku_master["sku"].unique())
 objective_options = ["maximize_profit", "maximize_revenue", "protect_inventory"]
@@ -139,6 +145,36 @@ with st.expander("Constraints (optional)"):
     price_max = c2.number_input("Max price ($, 0 = no cap)", min_value=0.0, value=0.0, step=1.0, key=f"pmax_{key_suffix}")
     min_margin = c3.slider("Min margin", 0.0, 0.9, 0.10, step=0.01, key=f"margin_{key_suffix}")
     max_change = c4.slider("Max price change", 0.05, 2.0, 0.50, step=0.05, key=f"maxchange_{key_suffix}")
+    inventory_override = st.number_input(
+        "Available inventory override (0 = use this day's actual starting inventory)",
+        min_value=0.0,
+        value=0.0,
+        step=10.0,
+        key=f"inventory_{key_suffix}",
+        help="Lower this to explore a tighter stock position than what actually happened historically.",
+    )
+
+st.markdown("##### Uncertainty")
+bayes_col, risk_col = st.columns([1, 2])
+use_bayesian = bayes_col.checkbox(
+    "Use Bayesian (posterior-based) optimization",
+    value=True,
+    key=f"bayes_{key_suffix}",
+    help=(
+        "Draws from Phase 3's fitted posterior over this SKU's elasticity instead of a single "
+        "point estimate, and optimizes expected profit/revenue net of stockout risk."
+    ),
+)
+risk_aversion = risk_col.slider(
+    "Risk aversion (Aggressive ←→ Conservative)",
+    0.0,
+    1.0,
+    0.3,
+    step=0.05,
+    key=f"risk_{key_suffix}",
+    disabled=not use_bayesian,
+    help="Higher values trade expected profit/revenue for a lower probability of stocking out.",
+)
 
 # ---------------------------------------------------------------------------
 # Step 3: exactly one code path from here, regardless of input source
@@ -153,18 +189,46 @@ scenario = build_manual_scenario(
     price_max=price_max if price_max > 0 else None,
     min_margin=min_margin,
     max_price_change_pct=max_change,
+    inventory_override=inventory_override if inventory_override > 0 else None,
 )
 
 try:
     context = build_demand_context(sku_master, daily, scenario.sku, scenario.start_date, scenario.end_date)
-    result = recommend_price(
-        context,
-        scenario.objective,
-        price_min=scenario.price_min,
-        price_max=scenario.price_max,
-        min_margin=scenario.min_margin,
-        max_price_change_pct=scenario.max_price_change_pct,
-    )
+    if use_bayesian:
+        elasticity_samples = get_elasticity_samples(posterior_samples, context.sku)
+        if len(elasticity_samples) == 0:
+            st.warning(f"No posterior draws for {context.sku} -- falling back to the point estimate.")
+            result = recommend_price(
+                context,
+                scenario.objective,
+                inventory=scenario.inventory_override,
+                price_min=scenario.price_min,
+                price_max=scenario.price_max,
+                min_margin=scenario.min_margin,
+                max_price_change_pct=scenario.max_price_change_pct,
+            )
+        else:
+            result = recommend_price_bayesian(
+                context,
+                scenario.objective,
+                elasticity_samples=elasticity_samples,
+                risk_aversion=risk_aversion,
+                inventory=scenario.inventory_override,
+                price_min=scenario.price_min,
+                price_max=scenario.price_max,
+                min_margin=scenario.min_margin,
+                max_price_change_pct=scenario.max_price_change_pct,
+            )
+    else:
+        result = recommend_price(
+            context,
+            scenario.objective,
+            inventory=scenario.inventory_override,
+            price_min=scenario.price_min,
+            price_max=scenario.price_max,
+            min_margin=scenario.min_margin,
+            max_price_change_pct=scenario.max_price_change_pct,
+        )
 except ValueError as e:
     st.error(str(e))
     st.stop()
@@ -263,6 +327,40 @@ ax_units.text(
 plt.tight_layout()
 st.pyplot(fig)
 plt.close(fig)
+
+# ---------------------------------------------------------------------------
+# Outcome uncertainty at the recommended price (Bayesian mode only) --
+# the posterior draws behind the mean curve above, condensed to a p10-p50-p90
+# range per metric rather than swept across the whole price axis.
+# ---------------------------------------------------------------------------
+
+if use_bayesian and "profit_distribution" in result:
+    st.markdown("##### Likely outcome range at the recommended price")
+    st.caption(
+        f"Across {len(elasticity_samples)} posterior draws of this SKU's elasticity "
+        f"(stockout probability at the recommended price: {result['stockout_probability']:.1%})."
+    )
+
+    fig2, (ax_dollars_dist, ax_units_dist) = plt.subplots(2, 1, figsize=(9, 3), facecolor=COLOR_SURFACE)
+
+    dollar_rows = [("Profit", result["profit_distribution"]), ("Revenue", result["revenue_distribution"])]
+    for ax, rows, label_color in ((ax_dollars_dist, dollar_rows, COLOR_PROFIT), (ax_units_dist, [("Units", result["units_distribution"])], COLOR_UNITS)):
+        ax.set_facecolor(COLOR_SURFACE)
+        y_positions = list(range(len(rows)))
+        for y, (label, dist) in zip(y_positions, rows):
+            ax.plot([dist["p10"], dist["p90"]], [y, y], color=label_color, linewidth=4, solid_capstyle="round", zorder=2)
+            ax.plot(dist["p50"], y, "o", color=COLOR_RECOMMENDED, markersize=7, zorder=3)
+        ax.set_yticks(y_positions)
+        ax.set_yticklabels([r[0] for r in rows])
+        ax.set_ylim(-0.7, len(rows) - 0.3)
+        ax.grid(color=COLOR_GRID, linewidth=0.8, axis="x")
+        ax.spines[["top", "right", "left"]].set_visible(False)
+
+    ax_dollars_dist.set_xlabel("$")
+    ax_units_dist.set_xlabel("Units")
+    plt.tight_layout()
+    st.pyplot(fig2)
+    plt.close(fig2)
 
 with st.expander("Underlying price-response data"):
     st.dataframe(curve, width='stretch')

@@ -11,9 +11,11 @@ import sys
 import unittest
 from pathlib import Path
 
+import numpy as np
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from optimization import optimize_price, optimize_price_gp, resolve_price_bounds
+from optimization import optimize_price, optimize_price_gp, optimize_price_bayesian, resolve_price_bounds
 
 
 # A deterministic "elastic" scenario (e < -1, e.g. Commodity/Seasonal/Promo
@@ -140,6 +142,122 @@ class TestGeometricProgrammingCrossCheck(unittest.TestCase):
         # exactly. They should agree within roughly one grid step.
         grid_step = (300 - 10) / 2000
         self.assertAlmostEqual(grid_result["recommended_price"], gp_price, delta=grid_step * 2)
+
+
+class TestBayesianOptimizer(unittest.TestCase):
+    """optimize_price_bayesian (Phase 5c): posterior draws instead of a point estimate."""
+
+    @staticmethod
+    def _draws(mean=-2.0, sd=0.1, n=300, seed=0):
+        return np.random.default_rng(seed).normal(mean, sd, size=n)
+
+    def test_zero_risk_aversion_matches_point_estimate(self):
+        draws = self._draws()
+        point = optimize_price("maximize_profit", **ELASTIC, price_max=300)
+        bayes = optimize_price_bayesian(
+            "maximize_profit",
+            day_base_prices=[ELASTIC["base_price"]],
+            day_base_units=[ELASTIC["base_units"]],
+            cost=ELASTIC["cost"],
+            elasticity_samples=draws,
+            price_max=300,
+            risk_aversion=0.0,
+        )
+        # Not identical -- mean(profit over draws) != profit(mean elasticity)
+        # by Jensen's inequality -- but should be close for a tight posterior.
+        self.assertAlmostEqual(point["recommended_price"], bayes["recommended_price"], delta=2.0)
+
+    def test_higher_risk_aversion_reduces_stockout_probability(self):
+        draws = self._draws()
+        low_risk = optimize_price_bayesian(
+            "maximize_profit",
+            day_base_prices=[100.0],
+            day_base_units=[1000.0],
+            cost=50.0,
+            elasticity_samples=draws,
+            inventory=700,
+            price_max=300,
+            risk_aversion=0.0,
+        )
+        high_risk = optimize_price_bayesian(
+            "maximize_profit",
+            day_base_prices=[100.0],
+            day_base_units=[1000.0],
+            cost=50.0,
+            elasticity_samples=draws,
+            inventory=700,
+            price_max=300,
+            risk_aversion=0.6,
+        )
+        self.assertGreater(high_risk["recommended_price"], low_risk["recommended_price"])
+        self.assertLess(high_risk["stockout_probability"], low_risk["stockout_probability"])
+
+    def test_protect_inventory_geq_profit_when_constrained(self):
+        draws = self._draws()
+        profit = optimize_price_bayesian(
+            "maximize_profit",
+            day_base_prices=[100.0],
+            day_base_units=[1000.0],
+            cost=50.0,
+            elasticity_samples=draws,
+            price_max=300,
+        )
+        protect = optimize_price_bayesian(
+            "protect_inventory",
+            day_base_prices=[100.0],
+            day_base_units=[1000.0],
+            cost=50.0,
+            elasticity_samples=draws,
+            inventory=700,
+            price_max=300,
+        )
+        self.assertGreaterEqual(protect["recommended_price"], profit["recommended_price"] - 1e-6)
+
+    def test_percentile_distribution_is_ordered(self):
+        draws = self._draws()
+        result = optimize_price_bayesian(
+            "maximize_profit",
+            day_base_prices=[100.0],
+            day_base_units=[1000.0],
+            cost=50.0,
+            elasticity_samples=draws,
+            price_max=300,
+        )
+        dist = result["profit_distribution"]
+        self.assertLessEqual(dist["p10"], dist["p50"])
+        self.assertLessEqual(dist["p50"], dist["p90"])
+
+    def test_rejects_non_negative_elasticity_draws(self):
+        with self.assertRaises(ValueError):
+            optimize_price_bayesian(
+                "maximize_profit",
+                day_base_prices=[100.0],
+                day_base_units=[1000.0],
+                cost=50.0,
+                elasticity_samples=np.array([-2.0, 0.5, -1.8]),
+                price_max=300,
+            )
+
+    def test_multi_day_sums_across_days(self):
+        draws = self._draws()
+        single_day = optimize_price_bayesian(
+            "maximize_profit",
+            day_base_prices=[100.0],
+            day_base_units=[1000.0],
+            cost=50.0,
+            elasticity_samples=draws,
+            price_max=300,
+        )
+        three_identical_days = optimize_price_bayesian(
+            "maximize_profit",
+            day_base_prices=[100.0, 100.0, 100.0],
+            day_base_units=[1000.0, 1000.0, 1000.0],
+            cost=50.0,
+            elasticity_samples=draws,
+            price_max=300,
+        )
+        self.assertAlmostEqual(single_day["recommended_price"], three_identical_days["recommended_price"], places=1)
+        self.assertAlmostEqual(three_identical_days["profit"] / single_day["profit"], 3.0, places=2)
 
 
 if __name__ == "__main__":

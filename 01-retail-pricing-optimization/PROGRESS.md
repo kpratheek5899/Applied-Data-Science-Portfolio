@@ -64,10 +64,16 @@ Revised scope (see plan `crystalline-splashing-lecun.md`): presets are prefills 
 
 Result: all 6 presets and manual/date-range mode run end-to-end through one shared code path (`Scenario` → `build_demand_context` → `recommend_price`), verified with `AppTest` (not just unit tests of internal functions) — this caught and fixed a real pandas dtype bug (assigning formatted currency strings into a float64 column) that unit tests alone wouldn't have surfaced. 41/41 tests passing across the full suite.
 
-### 5c — Bayesian risk-aware optimization ⏸️ NOT STARTED
+### 5c — Bayesian risk-aware optimization ✅ DONE
 
-- [ ] `optimize_price_bayesian` in `src/optimization.py` (posterior draws + risk-aversion slider)
-- [ ] Fan/percentile chart of outcomes at recommended price
+- [x] `optimize_price_bayesian` in `src/optimization.py` (posterior draws + risk-aversion slider, day-array signature covers single-day and multi-day uniformly)
+- [x] `demand_model.recommend_price_bayesian` bridge
+- [x] Fan/percentile chart (p10/p50/p90) of outcomes at the recommended price
+- [x] Inventory-override control added to the UI (was a real gap — without it there was no way to construct a genuinely inventory-constrained `maximize_profit` scenario through the app, since real historical inventory is usually loose relative to profit-optimal prices)
+- [x] `tests/test_optimizer.py` +6 tests (zero-risk-aversion ≈ point estimate, higher risk-aversion lowers stockout probability, protect_inventory ≥ profit, percentiles ordered, rejects non-negative elasticity draws, multi-day sums correctly)
+- [x] `tests/test_app_pages.py` +2 tests (risk-aversion slider changes the recommendation, disabling Bayesian mode falls back cleanly)
+
+Result: all three objectives now use the mean across ~300 posterior draws instead of a point estimate; `protect_inventory` keeps 5b's deterministic hard floor (computed from the posterior mean), while `maximize_profit`/`maximize_revenue` subtract `risk_aversion × P(stockout) × (target's own range on the grid)` — the range normalization keeps the 0–1 slider meaningfully comparable across differently-scaled SKUs. 49/49 tests passing across the full suite. One real finding while testing: risk_aversion only has room to act when the *unconstrained* profit-optimal price both sits inside the allowed price-change band and carries genuine stockout risk there — a real economic property (elastic goods pushed to a binding price-change ceiling already get whatever inventory protection higher pricing provides "for free"), not a bug, but it made the naive test scenario a poor showcase, which is what surfaced the missing inventory-override control.
 
 ### 5d — Closed-loop Decision Replay ⏸️ NOT STARTED
 
