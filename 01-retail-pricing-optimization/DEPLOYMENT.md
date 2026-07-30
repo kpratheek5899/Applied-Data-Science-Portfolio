@@ -1,25 +1,32 @@
 # Deploying to Streamlit Community Cloud
 
 The app is self-contained: it only reads the small precomputed CSVs under
-`data/app/` (already committed to git, ~4.7MB total) and the four packages
-in `01-retail-pricing-optimization/requirements.txt` (`streamlit`, `pandas`,
-`numpy`, `matplotlib`). It never needs the ~970MB simulated dataset, never
-refits the Bayesian model, and never imports `pymc`/`cvxpy`/`statsmodels`
-at runtime — verified by running the app against an isolated virtualenv
-containing *only* those four packages before writing this doc.
+`data/app/` (already committed to git, ~4.7MB total) and the five packages
+in `01-retail-pricing-optimization/app/requirements.txt` (`streamlit`,
+`pandas`, `numpy`, `matplotlib`, `scipy`). It never needs the ~970MB
+simulated dataset, never refits the Bayesian model, and never imports
+`pymc`/`cvxpy`/`statsmodels` at runtime — verified by running the app
+against an isolated virtualenv containing *only* those five packages
+before writing this doc.
 
 ## One thing to get right: which `requirements.txt`
 
 The **repo root** also has a `requirements.txt` — a raw `pip freeze` dump
 (UTF-16, ~164 lines, covers all three portfolio projects including
-`pymc`/`cvxpy`/`statsmodels`/etc.). That is **not** the one this app should
-build from. Streamlit Community Cloud can be told explicitly which
-requirements file to use (see step 4) — set it to
-`01-retail-pricing-optimization/requirements.txt` explicitly rather than
-relying on auto-detection, so the build never picks up the root file by
-accident (which would at minimum waste build minutes pulling in every other
-project's dependencies, and the UTF-16 encoding may not even parse as a
-valid requirements file).
+`pymc`/`cvxpy`/`statsmodels`/a Windows-only `pywinpty` package that can't
+even build on Linux). That is **not** the one this app should build from.
+
+Streamlit Community Cloud auto-detects the requirements file by looking
+**in the same directory as the main script**, and only falls back to the
+repo root if it finds nothing there. That's why this project's
+`requirements.txt` lives at `01-retail-pricing-optimization/app/requirements.txt`
+— right next to `streamlit_app.py` — rather than one level up. (An earlier
+version of this file lived one directory up and was silently skipped in
+favor of the root file, which broke a real deploy: the build tried to
+compile `pywinpty` on Streamlit Cloud's Linux servers and failed outright.)
+Don't move it back up a level, and don't rely on an "Advanced settings"
+field to override the path — Community Cloud does not reliably expose one;
+directory placement is the mechanism that actually works.
 
 ## Steps
 
@@ -37,9 +44,9 @@ valid requirements file).
    - **Branch:** `main`
    - **Main file path:** `01-retail-pricing-optimization/app/streamlit_app.py`
    - Under **"Advanced settings"**: set **Python version to 3.12** (what
-     this app was built and tested against), and if there's a field for
-     the requirements/dependencies file path, set it explicitly to
-     `01-retail-pricing-optimization/requirements.txt`.
+     this app was built and tested against). No dependencies-file field
+     needs setting — `requirements.txt` living next to `streamlit_app.py`
+     is what makes Community Cloud find the right one automatically.
 
 5. Optionally customize the subdomain (the app URL is
    `https://<your-choice>.streamlit.app`).
