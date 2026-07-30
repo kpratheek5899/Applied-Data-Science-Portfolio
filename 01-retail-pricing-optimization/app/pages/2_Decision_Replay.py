@@ -31,7 +31,6 @@ inject_metric_css()
 
 with st.sidebar:
     st.markdown("### Nova Retail")
-    st.caption("Applied Data Science Portfolio — Project 1")
     st.link_button(
         "View source on GitHub",
         "https://github.com/kpratheek5899/Applied-Data-Science-Portfolio/tree/main/01-retail-pricing-optimization",

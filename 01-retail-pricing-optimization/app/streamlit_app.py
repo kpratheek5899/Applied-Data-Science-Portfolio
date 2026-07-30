@@ -36,11 +36,10 @@ GITHUB_URL = "https://github.com/kpratheek5899/Applied-Data-Science-Portfolio/tr
 
 with st.sidebar:
     st.markdown("### Nova Retail")
-    st.caption("Applied Data Science Portfolio — Project 1")
     st.link_button("View source on GitHub", GITHUB_URL, width="stretch")
 
 st.title("Nova Retail — Pricing & Capacity Optimization Engine")
-st.caption(f"Portfolio project by [kpratheek5899]({GITHUB_URL}) — full source on GitHub.")
+st.caption(f"[View source on GitHub]({GITHUB_URL})")
 
 st.markdown(
     """
