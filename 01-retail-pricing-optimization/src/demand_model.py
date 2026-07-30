@@ -33,7 +33,8 @@ class DemandContext:
     day_dates: list
     day_prices: list
     day_units: list
-    starting_inventory: float
+    starting_inventory: float  # first day only -- display/reference use
+    window_starting_inventory: float  # summed across every day in the window -- what "protect inventory" actually protects
     inventory_capacity: float
     stock_status: str
     event_name: str
@@ -90,6 +91,7 @@ def build_demand_context(
         day_prices=window["actual_price"].tolist(),
         day_units=window["actual_units"].tolist(),
         starting_inventory=float(first_day["starting_inventory"]),
+        window_starting_inventory=float(window["starting_inventory"].sum()),
         inventory_capacity=float(window["inventory_capacity"].sum()),
         stock_status=str(first_day["stock_status"]),
         event_name=str(first_day["event_name"]),
@@ -111,10 +113,15 @@ def recommend_price(
     """
     Run the optimizer for `context`, dispatching to the single-day or
     multi-day mechanism in `optimization.py` depending on the window size.
-    `inventory` defaults to the context's own starting inventory if not
-    overridden by the caller (e.g. a user-defined scenario).
+    `inventory` defaults to the window's *total* starting inventory (summed
+    across every day in the window) if not overridden by the caller -- using
+    only the first day's inventory here would compare one day's stock
+    against demand summed over the whole window, which for "protect
+    inventory" on a multi-day range produced an absurdly high, often
+    infeasible price floor (a real bug found and fixed after Phase 5's
+    initial release).
     """
-    inventory = inventory if inventory is not None else context.starting_inventory
+    inventory = inventory if inventory is not None else context.window_starting_inventory
 
     if context.is_multi_day:
         return optimize_price_multi_day(
@@ -163,9 +170,11 @@ def recommend_price_bayesian(
     (`elasticity_samples`, from `data_loader.get_elasticity_samples`) instead
     of the point estimate in `context.elasticity` -- Phase 5c. Works
     uniformly for single-day and multi-day contexts (unlike `recommend_price`,
-    which dispatches to two different `optimization.py` functions).
+    which dispatches to two different `optimization.py` functions). See
+    `recommend_price`'s docstring for why `inventory` defaults to the
+    window-summed figure, not just the first day's.
     """
-    inventory = inventory if inventory is not None else context.starting_inventory
+    inventory = inventory if inventory is not None else context.window_starting_inventory
 
     return optimize_price_bayesian(
         objective,

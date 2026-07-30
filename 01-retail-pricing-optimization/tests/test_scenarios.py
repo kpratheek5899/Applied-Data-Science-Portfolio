@@ -14,9 +14,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import pandas as pd
 
-from data_loader import load_sku_master, load_daily_timeseries
+from data_loader import load_sku_master, load_daily_timeseries, load_posterior_samples, get_elasticity_samples
 from scenario_engine import build_predefined_scenarios, build_manual_scenario, Scenario
-from demand_model import build_demand_context, recommend_price
+from demand_model import build_demand_context, recommend_price, recommend_price_bayesian
 from explanations import generate_explanation
 
 
@@ -130,6 +130,69 @@ class TestDateRangeAggregation(unittest.TestCase):
         first_date = self.daily[self.daily["sku"] == sku]["date"].min()
         ctx = build_demand_context(self.sku_master, self.daily, sku, first_date)
         self.assertFalse(ctx.is_multi_day)
+
+
+class TestMultiDayInventoryDefault(unittest.TestCase):
+    """
+    Regression coverage for a real bug: Protect Inventory over a multi-day
+    window used to default `inventory` to just the *first day's* stock
+    (`context.starting_inventory`) while comparing it against demand summed
+    across the *whole* window -- comparing one day's stock to N days'
+    demand. In Bayesian mode this reliably produced an infeasible price
+    floor (`resolve_price_bounds` raising ValueError) on any multi-day
+    Protect Inventory scenario without a manual inventory override. Fixed
+    by adding `DemandContext.window_starting_inventory` (summed across the
+    window) as the default instead.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.sku_master = load_sku_master()
+        cls.daily = load_daily_timeseries()
+        cls.posterior_samples = load_posterior_samples()
+
+    def test_window_starting_inventory_sums_across_the_window(self):
+        sku = self.sku_master.iloc[0]["sku"]
+        window = self.daily[self.daily["sku"] == sku].sort_values("date").iloc[10:17]
+        start, end = window["date"].iloc[0], window["date"].iloc[-1]
+
+        ctx = build_demand_context(self.sku_master, self.daily, sku, start, end)
+        self.assertAlmostEqual(ctx.window_starting_inventory, window["starting_inventory"].sum(), places=3)
+
+    def test_window_starting_inventory_equals_day_one_when_single_day(self):
+        sku = self.sku_master.iloc[0]["sku"]
+        first_date = self.daily[self.daily["sku"] == sku]["date"].min()
+        ctx = build_demand_context(self.sku_master, self.daily, sku, first_date)
+        self.assertAlmostEqual(ctx.window_starting_inventory, ctx.starting_inventory, places=6)
+
+    def test_multi_day_protect_inventory_bayesian_no_longer_raises(self):
+        # SKU_006 over its final 14 days: day-1 starting inventory alone
+        # (~6.9k) is well below the window's *summed* demand (~44.5k), which
+        # is exactly the shape that used to force an infeasible price floor.
+        # The window's *summed* starting inventory (~84.8k) comfortably
+        # covers that demand, so this should now resolve cleanly.
+        sku = "SKU_006"
+        end = self.daily["date"].max()
+        start = end - pd.Timedelta(days=13)
+        ctx = build_demand_context(self.sku_master, self.daily, sku, start, end)
+        samples = get_elasticity_samples(self.posterior_samples, sku)
+
+        result = recommend_price_bayesian(
+            ctx, "protect_inventory", samples, risk_aversion=0.1, min_margin=0.0, max_price_change_pct=0.05
+        )
+        self.assertGreater(result["recommended_price"], 0)
+
+    def test_multi_day_protect_inventory_uses_window_total_not_day_one(self):
+        sku = self.sku_master.iloc[0]["sku"]
+        window = self.daily[self.daily["sku"] == sku].sort_values("date").iloc[10:17]
+        start, end = window["date"].iloc[0], window["date"].iloc[-1]
+
+        ctx = build_demand_context(self.sku_master, self.daily, sku, start, end)
+        result = recommend_price(ctx, "protect_inventory", min_margin=0.10, max_price_change_pct=2.0)
+        # Recommended units must respect the window-summed inventory, and
+        # must NOT have been silently capped at just the first day's stock
+        # (the old, buggy default) whenever that's meaningfully smaller.
+        self.assertLessEqual(result["expected_units"], ctx.window_starting_inventory + 1e-6)
 
 
 class TestExplanationsVaryWithDirection(unittest.TestCase):
