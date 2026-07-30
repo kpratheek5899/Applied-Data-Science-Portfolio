@@ -19,6 +19,7 @@ import pandas as pd
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from data_loader import (
     load_sku_master,
@@ -31,8 +32,10 @@ from scenario_engine import build_predefined_scenarios, build_manual_scenario
 from demand_model import build_demand_context, recommend_price, recommend_price_bayesian
 from explanations import generate_explanation
 from metrics import before_after_table, risk_tier, scenario_summary_line, format_currency, format_pct
+from style import inject_metric_css
 
 st.set_page_config(page_title="Scenario Explorer -- Nova Retail", page_icon="🎛️", layout="wide")
+inject_metric_css()
 
 with st.sidebar:
     st.markdown("### Nova Retail")
@@ -286,8 +289,18 @@ with col_before:
     st.dataframe(display_table, hide_index=True, width='stretch')
 
 with col_after:
-    st.metric("Recommended price", format_currency(result["recommended_price"]), format_pct(result["price_change_pct"]))
-    st.metric("Expected profit", format_currency(result["profit"]), format_pct(result["profit_change_pct"]))
+    st.metric(
+        "Recommended price",
+        format_currency(result["recommended_price"]),
+        format_pct(result["price_change_pct"]),
+        help="The optimizer's suggested price for the selected objective. Delta is vs. the current/actual price in this scenario.",
+    )
+    st.metric(
+        "Expected profit",
+        format_currency(result["profit"]),
+        format_pct(result["profit_change_pct"]),
+        help="Model-estimated profit at the recommended price, not an observed outcome. Delta is vs. profit at the current price.",
+    )
     st.caption(f"Stockout risk: {risk_tier(result)}")
 
 st.info(generate_explanation(context, result))

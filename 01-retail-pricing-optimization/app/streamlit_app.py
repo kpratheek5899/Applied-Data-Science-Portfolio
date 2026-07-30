@@ -16,8 +16,10 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from data_loader import load_sku_master, load_daily_timeseries, get_date_bounds
+from style import inject_metric_css
 
 st.set_page_config(page_title="Nova Retail Pricing Engine", page_icon="📊", layout="wide")
+inject_metric_css()
 
 
 @st.cache_data
@@ -47,9 +49,13 @@ st.markdown(
 )
 
 col1, col2, col3 = st.columns(3)
-col1.metric("Simulated observations", "~2.92M")
-col2.metric("SKUs covered", f"{n_skus}")
-col3.metric("Date range", f"{date_lo.date()} – {date_hi.date()}")
+col1.metric("Simulated observations", "~2.92M", help="Total simulated transaction-level rows across all SKUs, stores, and channels.")
+col2.metric("SKUs covered", f"{n_skus}", help="Distinct SKUs in the simulated catalog, spanning 4 product types (Commodity, Premium, Promo Sensitive, Seasonal).")
+col3.metric(
+    "Date range",
+    f"{date_lo.strftime('%b %Y')} – {date_hi.strftime('%b %Y')}",
+    help=f"Full range: {date_lo.date()} to {date_hi.date()}",
+)
 
 st.divider()
 

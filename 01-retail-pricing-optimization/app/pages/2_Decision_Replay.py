@@ -19,12 +19,15 @@ import pandas as pd
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from data_loader import load_sku_master, load_daily_timeseries, load_posterior_samples, get_date_bounds, get_elasticity_samples
 from replay_engine import run_closed_loop_replay, replay_to_frame
 from metrics import format_currency, format_pct
+from style import inject_metric_css
 
 st.set_page_config(page_title="Decision Replay -- Nova Retail", page_icon="🔁", layout="wide")
+inject_metric_css()
 
 with st.sidebar:
     st.markdown("### Nova Retail")
@@ -141,13 +144,22 @@ d2.metric(
     "Optimizer price",
     format_currency(selected.optimizer_price),
     format_pct((selected.optimizer_price - selected.actual_price) / selected.actual_price * 100),
+    help="What the optimizer would have charged this day, decided from the estimated model only (never the true elasticity). Delta is vs. the actual historical price.",
 )
 d3.metric("Actual units sold", f"{selected.actual_units:,.0f}")
-d4.metric("Optimizer units sold", f"{selected.optimizer_units:,.0f}")
+d4.metric(
+    "Optimizer units sold",
+    f"{selected.optimizer_units:,.0f}",
+    help="Units the optimizer's price would have sold, realized against the true simulator model -- the one place this app is allowed to use ground truth, and only to score the outcome, never to decide the price.",
+)
 
 e1, e2, e3, e4 = st.columns(4)
 e1.metric("Actual ending inventory", f"{selected.actual_ending_inventory:,.0f}")
-e2.metric("Optimizer ending inventory", f"{selected.optimizer_ending_inventory:,.0f}")
+e2.metric(
+    "Optimizer ending inventory",
+    f"{selected.optimizer_ending_inventory:,.0f}",
+    help="Inventory left over under the optimizer's own trajectory -- this is the closed loop: today's number reflects yesterday's optimizer decision, not the fixed historical inventory.",
+)
 e3.metric("Actual profit (day)", format_currency(selected.actual_profit))
 e4.metric("Optimizer profit (day)", format_currency(selected.optimizer_profit))
 

@@ -21,12 +21,15 @@ import pandas as pd
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from data_loader import load_sku_master, load_daily_timeseries, get_date_bounds
 from adaptive_simulation import run_adaptive_simulation, adaptive_to_frame
 from metrics import format_currency
+from style import inject_metric_css
 
 st.set_page_config(page_title="Adaptive Learning -- Nova Retail", page_icon="🧠", layout="wide")
+inject_metric_css()
 
 with st.sidebar:
     st.markdown("### Nova Retail")
@@ -138,14 +141,21 @@ conf1.metric(
     f"[{day1_ts_day.posterior_ci_low:.2f}, {day1_ts_day.posterior_ci_high:.2f}]",
     f"width {day1_width:.2f}",
     delta_color="off",
+    help="The starting (Day 1) 90% credible interval for elasticity, before any learning -- deliberately wide.",
 )
 conf2.metric(
     f"Day {day_index + 1}: elasticity 90% CI",
     f"[{selected_ts_day.posterior_ci_low:.2f}, {selected_ts_day.posterior_ci_high:.2f}]",
     f"width {selected_width - day1_width:+.2f} vs. Day 1",
     delta_color="inverse",  # narrower (negative change) is the desired direction
+    help="The 90% credible interval as of the currently selected day. A negative width delta means the belief has narrowed -- i.e. genuine learning.",
 )
-conf3.metric("Day's sampled elasticity", f"{selected_ts_day.elasticity_used:.2f}", "Exploring" if selected_ts_day.is_exploring else "Exploiting")
+conf3.metric(
+    "Day's sampled elasticity",
+    f"{selected_ts_day.elasticity_used:.2f}",
+    "Exploring" if selected_ts_day.is_exploring else "Exploiting",
+    help="The value Thompson Sampling actually drew and priced with today (not the posterior mean). 'Exploring' = the draw deviated notably from the current belief, a deliberate probe rather than a mistake.",
+)
 
 # ---------------------------------------------------------------------------
 # 1. Cumulative profit / regret race chart -- small multiples (different
@@ -251,8 +261,16 @@ plt.close(fig3)
 
 totals = df.groupby("variant")[["profit", "regret"]].sum()
 s1, s2, s3 = st.columns(3)
-s1.metric("Static total profit", format_currency(totals.loc["static", "profit"]))
-s2.metric("Thompson Sampling total profit", format_currency(totals.loc["thompson", "profit"]))
+s1.metric(
+    "Static total profit",
+    format_currency(totals.loc["static", "profit"]),
+    help="Uses Day 1's frozen belief for every day in the window -- never updates, regardless of what it observes.",
+)
+s2.metric(
+    "Thompson Sampling total profit",
+    format_currency(totals.loc["thompson", "profit"]),
+    help="Updates its belief every day from the outcome of its own pricing decision -- this is the policy that's actually learning.",
+)
 s3.metric("Oracle total profit", format_currency(totals.loc["oracle", "profit"]))
 st.caption("Oracle: \"if we had known the truth all along\" -- a theoretical ceiling for comparison, not a real decision-maker.")
 
