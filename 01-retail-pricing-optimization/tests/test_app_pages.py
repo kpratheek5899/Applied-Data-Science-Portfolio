@@ -49,6 +49,18 @@ class TestScenarioExplorer(unittest.TestCase):
                 at.selectbox[0].select(name).run(timeout=30)
                 self.assertEqual(list(at.exception), [], f"Preset {name!r} raised an exception")
 
+    def test_binding_constraint_note_shows_when_recommendation_is_capped(self):
+        # "Inventory Shortage" saturates the default Max Price Change
+        # guardrail (a real finding -- see PROGRESS.md) -- the page must
+        # surface that plainly rather than showing a boundary-pinned price
+        # indistinguishable from a genuine interior optimum.
+        at = AppTest.from_file(SCENARIO_EXPLORER_PAGE)
+        at.run(timeout=30)
+        at.selectbox[0].select("Inventory Shortage").run(timeout=30)
+        self.assertEqual(list(at.exception), [])
+        captions = [c.value for c in at.caption]
+        self.assertTrue(any("capped by" in c for c in captions))
+
     def test_date_range_mode_loads_without_exceptions(self):
         at = AppTest.from_file(SCENARIO_EXPLORER_PAGE)
         at.run(timeout=30)

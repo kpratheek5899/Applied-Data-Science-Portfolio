@@ -304,6 +304,16 @@ with col_after:
 
 st.info(generate_explanation(context, result))
 
+binding = result.get("binding_constraint")
+if binding is not None:
+    direction = "higher" if binding["side"] == "high" else "lower"
+    st.caption(
+        f"⚠️ This recommendation is capped by **{binding['label']}**, not a genuine profit peak -- the "
+        f"unconstrained optimum lies {direction}. Set a real Min/Max price (e.g. a MAP floor/ceiling) if "
+        "you want the optimizer to search within your actual business constraints instead of the default "
+        "±% guardrail."
+    )
+
 # ---------------------------------------------------------------------------
 # Price-response chart -- small multiples (profit/revenue share a $ axis;
 # units gets its own panel, per the dataviz skill's "no dual axis" rule).

@@ -48,6 +48,71 @@ class TestPriceBounds(unittest.TestCase):
         self.assertFalse(result["stockout_risk"])
 
 
+class TestBindingConstraintAttribution(unittest.TestCase):
+    """
+    `resolve_price_bounds` records which of the 4 price-bound sources
+    produced each side of the feasible range, and `optimize_price` /
+    `optimize_price_bayesian` use it to label a boundary-pinned
+    recommendation with *why* -- found necessary after a real scenario
+    (Protect Inventory, no explicit price bounds) silently saturated the
+    default Max Price Change guardrail and looked identical to a genuine
+    interior optimum.
+    """
+
+    def test_max_price_change_binds_on_the_high_side(self):
+        # Inelastic demand (e > -1): revenue keeps rising with price
+        # indefinitely, so "maximize_revenue" always wants the ceiling.
+        result = optimize_price("maximize_revenue", **INELASTIC, max_price_change_pct=0.2)
+        self.assertAlmostEqual(result["recommended_price"], INELASTIC["base_price"] * 1.2, places=6)
+        self.assertEqual(result["binding_constraint"]["side"], "high")
+        self.assertEqual(result["binding_constraint"]["reason"], "max_price_change")
+
+    def test_price_max_binds_on_the_high_side_when_tighter_than_the_change_band(self):
+        result = optimize_price(
+            "maximize_revenue", **INELASTIC, max_price_change_pct=0.5, price_max=110.0
+        )
+        self.assertAlmostEqual(result["recommended_price"], 110.0, places=6)
+        self.assertEqual(result["binding_constraint"], {"side": "high", "reason": "price_max", "label": "Max price"})
+
+    def test_max_price_change_binds_on_the_low_side(self):
+        # Elastic demand (e < -1): revenue(p) is monotonically *decreasing*
+        # in p (see TestObjectivesDiffer), so "maximize_revenue" always
+        # wants the floor.
+        result = optimize_price("maximize_revenue", **ELASTIC, max_price_change_pct=0.3)
+        self.assertAlmostEqual(result["recommended_price"], ELASTIC["base_price"] * 0.7, places=6)
+        self.assertEqual(result["binding_constraint"]["side"], "low")
+        self.assertEqual(result["binding_constraint"]["reason"], "max_price_change")
+
+    def test_min_margin_binds_on_the_low_side_when_tighter_than_the_change_band(self):
+        # cost/(1 - 0.9) = 500 -- no max_price_change_pct here, so it's the
+        # only floor candidate, well above where a %-change band would land.
+        result = optimize_price("maximize_revenue", **ELASTIC, min_margin=0.9, price_max=1000)
+        self.assertAlmostEqual(result["recommended_price"], ELASTIC["cost"] / (1 - 0.9), places=6)
+        self.assertEqual(result["binding_constraint"]["reason"], "min_margin")
+
+    def test_interior_optimum_reports_no_binding_constraint(self):
+        # cost*e/(e+1) = 50*-2/-1 = 100 -- ELASTIC's unconstrained
+        # profit-max price, strictly inside a generous [60, 150] band.
+        result = optimize_price("maximize_profit", **ELASTIC, price_min=60, price_max=150)
+        self.assertGreater(result["recommended_price"], 60)
+        self.assertLess(result["recommended_price"], 150)
+        self.assertIsNone(result["binding_constraint"])
+
+    def test_bayesian_mode_also_reports_binding_constraint(self):
+        samples = np.full(50, INELASTIC["elasticity"])
+        result = optimize_price_bayesian(
+            "maximize_revenue",
+            day_base_prices=[INELASTIC["base_price"]],
+            day_base_units=[INELASTIC["base_units"]],
+            cost=INELASTIC["cost"],
+            elasticity_samples=samples,
+            price_max=110.0,
+            max_price_change_pct=0.5,
+        )
+        self.assertAlmostEqual(result["recommended_price"], 110.0, places=6)
+        self.assertEqual(result["binding_constraint"]["reason"], "price_max")
+
+
 class TestInternalConsistency(unittest.TestCase):
     def test_revenue_and_profit_match_price_and_units(self):
         result = optimize_price("maximize_profit", **ELASTIC, price_max=300)

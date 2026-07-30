@@ -74,10 +74,24 @@ def price_response_curve(
     )
 
 
+#: Human-readable labels for `PriceBounds.low_reason` / `high_reason`, for UI display.
+BOUND_REASON_LABELS = {
+    "price_min": "Min price",
+    "price_max": "Max price",
+    "min_margin": "Min margin",
+    "max_price_change": "Max price change",
+    "inventory_floor": "Inventory floor (Protect Inventory)",
+    "default_floor": "Default floor (1% above cost)",
+    "default_ceiling": "Default ceiling (2x current price)",
+}
+
+
 @dataclass
 class PriceBounds:
     low: float
     high: float
+    low_reason: str = "default_floor"
+    high_reason: str = "default_ceiling"
 
 
 def resolve_price_bounds(
@@ -98,29 +112,49 @@ def resolve_price_bounds(
     Unset bounds fall back to sane defaults (never price below cost, never
     more than double the current price) rather than being unconstrained.
 
+    Also records *which* candidate source produced each side (`low_reason`/
+    `high_reason`, keys into `BOUND_REASON_LABELS`) -- when a recommended
+    price sits exactly on `low` or `high`, this is what actually determined
+    it, and callers use it to tell a user "capped by X" rather than leaving
+    a boundary-constrained result looking identical to a genuine interior
+    optimum.
+
     Raises ValueError if the combined constraints leave no feasible price.
     """
     lo_candidates = [
-        c
-        for c in [
-            price_min,
-            cost / (1 - min_margin) if min_margin is not None else None,
-            base_price * (1 - max_price_change_pct) if max_price_change_pct is not None else None,
-            inventory_floor_price,
+        (value, reason)
+        for value, reason in [
+            (price_min, "price_min"),
+            (cost / (1 - min_margin) if min_margin is not None else None, "min_margin"),
+            (
+                base_price * (1 - max_price_change_pct) if max_price_change_pct is not None else None,
+                "max_price_change",
+            ),
+            (inventory_floor_price, "inventory_floor"),
         ]
-        if c is not None
+        if value is not None
     ]
     hi_candidates = [
-        c
-        for c in [
-            price_max,
-            base_price * (1 + max_price_change_pct) if max_price_change_pct is not None else None,
+        (value, reason)
+        for value, reason in [
+            (price_max, "price_max"),
+            (
+                base_price * (1 + max_price_change_pct) if max_price_change_pct is not None else None,
+                "max_price_change",
+            ),
         ]
-        if c is not None
+        if value is not None
     ]
 
-    lo = max(lo_candidates) if lo_candidates else cost * 1.01
-    hi = min(hi_candidates) if hi_candidates else base_price * 2.0
+    if lo_candidates:
+        lo, lo_reason = max(lo_candidates, key=lambda pair: pair[0])
+    else:
+        lo, lo_reason = cost * 1.01, "default_floor"
+
+    if hi_candidates:
+        hi, hi_reason = min(hi_candidates, key=lambda pair: pair[0])
+    else:
+        hi, hi_reason = base_price * 2.0, "default_ceiling"
 
     if lo > hi:
         raise ValueError(
@@ -128,7 +162,23 @@ def resolve_price_bounds(
             "-- check min_margin / price_max / max_price_change_pct together"
         )
 
-    return PriceBounds(low=lo, high=hi)
+    return PriceBounds(low=lo, high=hi, low_reason=lo_reason, high_reason=hi_reason)
+
+
+def _binding_constraint(recommended_price: float, bounds: PriceBounds) -> dict | None:
+    """
+    None if `recommended_price` is an interior optimum; otherwise which side
+    it's pinned to and why, for UI display (see `BOUND_REASON_LABELS`).
+    Exact equality is safe here -- `recommended_price` always comes from a
+    grid built with `np.linspace(bounds.low, bounds.high, ...)`, so a
+    boundary-pinned result is bit-for-bit equal to `bounds.low`/`bounds.high`,
+    not just close to it.
+    """
+    if recommended_price == bounds.low:
+        return {"side": "low", "reason": bounds.low_reason, "label": BOUND_REASON_LABELS[bounds.low_reason]}
+    if recommended_price == bounds.high:
+        return {"side": "high", "reason": bounds.high_reason, "label": BOUND_REASON_LABELS[bounds.high_reason]}
+    return None
 
 
 def _inventory_floor_price(
@@ -218,11 +268,13 @@ def optimize_price(
     ending_inventory = (inventory - recommended_units) if inventory is not None else None
     sell_through_rate = (recommended_units / inventory) if inventory else None
     stockout_risk = bool(inventory is not None and recommended_units >= inventory)
+    binding_constraint = _binding_constraint(recommended_price, bounds)
 
     return {
         "objective": objective,
         "recommended_price": recommended_price,
         "current_price": base_price,
+        "binding_constraint": binding_constraint,
         "price_change_pct": (recommended_price - base_price) / base_price * 100,
         "expected_units": recommended_units,
         "current_units": current_units,
@@ -391,11 +443,19 @@ def optimize_price_multi_day(
     ending_inventory = (inventory - recommended_units) if inventory is not None else None
     sell_through_rate = (recommended_units / inventory) if inventory else None
     stockout_risk = bool(inventory is not None and recommended_units >= inventory)
+    # Only attributes a boundary-pinned result to one of the *price* bound
+    # sources (Min/Max price, Min margin, Max price change). Protect
+    # Inventory's post-hoc unit-feasibility filter above is a separate
+    # mechanism this doesn't attribute -- a recommendation cut off by
+    # inventory feasibility (rather than a price bound) reports as an
+    # interior optimum (None) here, a known gap, not a silent wrong answer.
+    binding_constraint = _binding_constraint(recommended_price, bounds)
 
     return {
         "objective": objective,
         "recommended_price": recommended_price,
         "current_price": reference_price,
+        "binding_constraint": binding_constraint,
         "price_change_pct": (recommended_price - reference_price) / reference_price * 100,
         "expected_units": recommended_units,
         "current_units": current_units,
@@ -543,6 +603,9 @@ def optimize_price_bayesian(
     ending_inventory = (inventory - recommended_units) if inventory is not None else None
     sell_through_rate = (recommended_units / inventory) if inventory else None
     stockout_risk_prob = float(stockout_prob[best_i])
+    # Same caveat as optimize_price_multi_day: only attributes to a price
+    # bound, not to Protect Inventory's separate unit-feasibility filter.
+    binding_constraint = _binding_constraint(recommended_price, bounds)
 
     curve = pd.DataFrame(
         {
@@ -566,6 +629,7 @@ def optimize_price_bayesian(
         "objective": objective,
         "recommended_price": recommended_price,
         "current_price": reference_price,
+        "binding_constraint": binding_constraint,
         "price_change_pct": (recommended_price - reference_price) / reference_price * 100,
         "expected_units": recommended_units,
         "current_units": current_units,
