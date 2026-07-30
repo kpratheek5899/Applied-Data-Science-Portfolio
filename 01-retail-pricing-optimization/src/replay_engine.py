@@ -38,6 +38,32 @@ from demand_model import build_demand_context, recommend_price, recommend_price_
 from optimization import constant_elasticity_units
 
 
+def apply_daily_replenishment(
+    current_inventory: float,
+    actual_starting_inventory_today: float,
+    prev_actual_ending_inventory: float,
+) -> float:
+    """
+    Shared by every closed-loop trajectory in this codebase (Decision Replay
+    here, and the three Adaptive Learning variants in
+    `adaptive_simulation.py`): the real simulator replenishes toward a
+    *target level* (roughly a fixed fraction of capacity), not by adding
+    back whatever was just consumed -- so a restock day tops a trajectory's
+    inventory up to that same target (only if it's currently below it;
+    never removes stock), and a non-restock day leaves it untouched. An
+    earlier version added the actual trajectory's absolute day-over-day
+    inventory delta instead, which -- since a protective pricing policy
+    typically sells less than history -- made inventory drift upward
+    without bound across the window instead of tracking a sensible target.
+    Extracted here (was inlined in `run_closed_loop_replay`) so this fix
+    isn't at risk of being silently reintroduced by a second implementation.
+    """
+    replenishment_occurred = actual_starting_inventory_today > prev_actual_ending_inventory + 1e-6
+    if replenishment_occurred:
+        return max(current_inventory, actual_starting_inventory_today)
+    return current_inventory
+
+
 def realize_true_outcome(
     candidate_price: float,
     actual_price: float,
@@ -127,19 +153,9 @@ def run_closed_loop_replay(
             # Day 1: same actual starting inventory as the historical trajectory.
             optimizer_inventory = actual_starting_inventory
         else:
-            # The real simulator replenishes toward a *target level* (roughly
-            # a fixed fraction of capacity), not by adding back whatever was
-            # just consumed -- so a restock day tops the optimizer trajectory
-            # up to that same target (only if it's currently below it; never
-            # removes stock), and a non-restock day leaves it untouched. An
-            # earlier version added the actual trajectory's absolute day-over-
-            # day inventory delta instead, which -- since the optimizer
-            # typically sells less than history under a protective price --
-            # made its inventory drift upward without bound across the
-            # window instead of tracking a sensible target.
-            replenishment_occurred = actual_starting_inventory > prev_actual_ending_inventory + 1e-6
-            if replenishment_occurred:
-                optimizer_inventory = max(optimizer_inventory, actual_starting_inventory)
+            optimizer_inventory = apply_daily_replenishment(
+                optimizer_inventory, actual_starting_inventory, prev_actual_ending_inventory
+            )
 
         context = build_demand_context(sku_master, daily, sku, date)
 

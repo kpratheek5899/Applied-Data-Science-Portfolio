@@ -19,6 +19,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LANDING_PAGE = str(PROJECT_ROOT / "app" / "streamlit_app.py")
 SCENARIO_EXPLORER_PAGE = str(PROJECT_ROOT / "app" / "pages" / "1_Scenario_Explorer.py")
 DECISION_REPLAY_PAGE = str(PROJECT_ROOT / "app" / "pages" / "2_Decision_Replay.py")
+ADAPTIVE_LEARNING_PAGE = str(PROJECT_ROOT / "app" / "pages" / "3_Adaptive_Learning.py")
 
 
 class TestLandingPage(unittest.TestCase):
@@ -161,6 +162,46 @@ class TestDecisionReplay(unittest.TestCase):
         self.assertEqual(len(at.error), 0)
         self.assertLess(at.date_input[0].value, default_start_date)
         self.assertGreater(len(at.get("metric")), 0)  # page still renders a full result
+
+
+class TestAdaptiveLearning(unittest.TestCase):
+    def test_loads_without_exceptions(self):
+        at = AppTest.from_file(ADAPTIVE_LEARNING_PAGE)
+        at.run(timeout=60)
+        self.assertEqual(list(at.exception), [])
+        self.assertGreater(len(at.get("metric")), 0)
+
+    def test_scrubbing_day_slider_no_exceptions(self):
+        at = AppTest.from_file(ADAPTIVE_LEARNING_PAGE)
+        at.run(timeout=60)
+        day_slider = [s for s in at.slider if s.label == "Day"][0]
+        day_slider.set_value(5).run(timeout=60)
+        self.assertEqual(list(at.exception), [])
+
+    def test_changing_controls_and_rerunning_no_exceptions(self):
+        at = AppTest.from_file(ADAPTIVE_LEARNING_PAGE)
+        at.run(timeout=60)
+
+        at.selectbox[0].select("SKU_027").run(timeout=60)
+        self.assertEqual(list(at.exception), [])
+
+        confidence_slider = [s for s in at.slider if s.label == "Starting confidence"][0]
+        confidence_slider.set_value(5.0).run(timeout=60)
+        self.assertEqual(list(at.exception), [])
+
+        at.button[0].click().run(timeout=60)
+        self.assertEqual(list(at.exception), [])
+        self.assertGreater(len(at.get("metric")), 0)
+
+    def test_growing_window_clamps_start_date(self):
+        at = AppTest.from_file(ADAPTIVE_LEARNING_PAGE)
+        at.run(timeout=60)
+        default_start_date = at.date_input[0].value
+
+        ndays_slider = [s for s in at.slider if s.label == "Window length (days)"][0]
+        ndays_slider.set_value(30).run(timeout=60)
+        self.assertEqual(list(at.exception), [])
+        self.assertLessEqual(at.date_input[0].value, default_start_date)
 
 
 if __name__ == "__main__":

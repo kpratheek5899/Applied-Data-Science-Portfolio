@@ -39,7 +39,7 @@ Result: recovers true elasticity within ~2-11% per product type (Commodity 1.9%,
 
 Result: revenue(price) is a pure monomial under constant elasticity (clean GP problem), but profit(price) is a monomial minus a monomial (a signomial, not DCP/DGP-representable) — so `optimize_price` uses grid search as one general mechanism for all three objectives (which also produces the exact data Phase 5's price-response chart needs), and `optimize_price_gp` demonstrates/validates the true GP solution for revenue specifically. Validated on both synthetic elastic/inelastic cases and a real SKU from the dataset.
 
-## Phase 5 — Streamlit Decision-Support App 🔄 IN PROGRESS
+## Phase 5 — Streamlit Decision-Support App ✅ DONE
 
 Revised scope (see plan `crystalline-splashing-lecun.md`): presets are prefills only, closed-loop Decision Replay, Bayesian risk-aware optimization, custom date-range selection. Must run as a self-contained, deployable simulation (Streamlit Community Cloud) for portfolio/LinkedIn demo purposes — no live dependency on the 970MB dataset, Bayesian refitting, or `pymc`/`cvxpy` at runtime.
 
@@ -84,11 +84,34 @@ Result: all three objectives now use the mean across ~300 posterior draws instea
 
 Result: two trajectories per SKU/window, both starting from the same actual Day-1 inventory — "actual" is a pure passthrough of history, "optimizer" recommends each day's price from the estimated model (same decision path as Scenario Explorer) and realizes the outcome via the true simulator model, with Day-(N+1) starting inventory coming from Day-N's own optimizer decision, not the next fixed historical row. 63/63 tests passing across the full suite. Two real bugs found and fixed while building, not just tuned away: (1) an initial replenishment rule added back the *absolute amount* the real network consumed each day, which let the optimizer trajectory's inventory drift upward without bound whenever its policy sold less than history (e.g. under `protect_inventory`) — fixed to replenish toward the same bounded *target level* the real network was refilled to, matching how `src/data_generation.py`'s simulator actually replenishes (target-based, not consumption-based); (2) the window-length and start-date controls could combine to overflow past the dataset's last date — an initial fix just caught this after the fact with `st.error`/`st.stop()`, but the real fix (per explicit user feedback) makes it structurally impossible: the start-date picker's own `max_value` is derived from whichever window length is currently selected (read before the date widget in script order, independent of visual column layout), with the persisted value proactively clamped in `st.session_state` when the window grows — confirmed via `AppTest` that widening the window mid-session clamps the date silently with zero errors and zero exceptions, rather than requiring the user to notice and fix an invalid combination themselves.
 
-### 5e — Polish + deployment ⏸️ NOT STARTED
+### 5e — Polish + deployment ✅ DONE
 
-- [ ] Landing page copy (retrospective/counterfactual framing, synthetic-data disclosure)
-- [ ] `01-retail-pricing-optimization/requirements.txt` (clean, deployment-scoped)
-- [ ] Streamlit Community Cloud deployment instructions
+- [x] Landing page copy (retrospective/counterfactual framing, synthetic-data disclosure) — written in 5b, confirmed still accurate
+- [x] `01-retail-pricing-optimization/requirements.txt` — `streamlit`, `pandas`, `numpy`, `matplotlib` only (exact pins matching what's tested); confirmed by grepping every top-level import on the live app's code path, then proving it for real by running all 3 pages via `AppTest` inside a **fresh, isolated venv containing only those 4 packages** — zero exceptions, no `pymc`/`cvxpy`/`statsmodels`/`arviz` needed
+- [x] Sidebar branding + GitHub source link added to all 3 pages (portfolio/demo polish)
+- [x] `DEPLOYMENT.md` — step-by-step Streamlit Community Cloud instructions, including an explicit warning about the repo-root `requirements.txt` (a separate messy UTF-16 pip-freeze dump covering all 3 portfolio projects) so the deploy doesn't accidentally pick that up instead
+
+Result: 63/63 tests passing. The app is genuinely self-contained — confirmed empirically, not just by inspection, that it runs with only 4 lightweight packages and the small committed `data/app/` CSVs (~4.7MB), no dependency on the 970MB simulated dataset or any model refitting. Deployment itself (connecting the repo on Streamlit Community Cloud) is a handoff — needs the user's account — documented in `DEPLOYMENT.md`.
+
+### 5f — Adaptive Learning demo (Thompson Sampling) ✅ DONE
+
+Supersedes the simpler Modifications 2/3 from the original follow-up spec with a full closed-form Bayesian bandit: three pricing policies (frozen "static" baseline, "Thompson Sampling", and a labeled-upper-bound "Oracle") run side by side from the same deliberately weak starting belief, learning purely from observing the outcomes of their own pricing decisions.
+
+- [x] `src/bayesian_learning.py` — Normal-Inverse-Gamma conjugate posterior over elasticity, closed-form sequential update, Thompson sample draw, Student-t credible interval. No PyMC/MCMC (must run interactively).
+- [x] `src/adaptive_simulation.py` — `run_adaptive_simulation` (all 3 variants, day-by-day, regret vs. Oracle's own profit).
+- [x] `apply_daily_replenishment` extracted from `replay_engine.py` into a shared helper (pure refactor — existing tests confirmed unchanged behavior) so Decision Replay and the 3 Adaptive Learning trajectories all reuse the same already-debugged bounded target-level replenishment logic.
+- [x] `app/pages/3_Adaptive_Learning.py` — SKU/window/objective/"starting confidence" controls, cached simulation run, day-scrub slider, all 4 required visualizations (cumulative regret race, posterior-narrowing band, explore/exploit-annotated price trajectory, running CI-width readout).
+- [x] `tests/test_adaptive_learning.py` (16 tests) + 4 new `AppTest` cases in `tests/test_app_pages.py`. 83/83 tests passing across the full suite.
+- [x] `requirements.txt` +`scipy` (needed for the Student-t credible interval) — re-verified the whole app still runs with zero exceptions in a fresh isolated venv containing only the 5 listed packages.
+
+**Three real bugs found and fixed while building this, not just tuned away** — each one changed the actual design, not just a parameter:
+1. **Exponential price runaway.** The price ceiling was computed relative to each day's own rolling (price, units) anchor; once a day's price hit that ceiling, the next day's ceiling was computed *from that price*, compounding into a runaway that doubled the price every day. Fixed by anchoring price bounds to the fixed window-*starting* price instead — the demand-curve anchor still rolls day to day (correct), only the bound doesn't.
+2. **Statistically unstable belief.** The first version modeled `log_units ~ alpha + beta*log_price` (2 free parameters). Once the pricing policy converges toward a narrow price range, that regression can't separate alpha from beta when its one predictor barely varies — a single noisy update pushed the fitted elasticity to a nonsensical *positive* value within days. Fixed by regressing log-*differences from the anchor* instead (`dlog_units ~ beta*dlog_price`, one parameter, no intercept needed) — matches how every other demand curve in this app already works, and is far better identified. Verified against synthetic data: matches closed-form OLS almost exactly with a weak prior.
+3. **No visible learning.** Two compounding calibration issues: (a) seeding the prior mean from Phase 2's `elasticity_phase2` gave "static" an already-accurate starting belief, leaving Thompson Sampling nothing to visibly out-learn; (b) the initial generic guess (-1.0, "unit elastic") sits almost exactly at the singularity of the closed-form profit-max formula (`cost*e/(e+1)` diverges as `e -> -1`), so every belief near it saturates the price ceiling regardless of the true value. Fixed by using a fixed, genuinely uninformed prior mean away from that singularity (-1.5) with a wider default price band (needed anyway: this dataset's actual historical prices run 40-300%+ below their theoretical profit-max, verified across the full SKU set) — confirmed across multiple SKUs and 20 seeds that Thompson Sampling now cuts regret roughly in half vs. static and reaches 95-98% of Oracle's profit, improving as the window grows.
+
+**Post-implementation audit against the memo** caught three small but real gaps, all fixed and re-verified (83/83 tests): (1) chart 1 was regret-only despite being titled a "profit / regret race chart" — restructured into a 2-panel figure (cumulative profit above cumulative regret, sharing an x-axis, no dual-axis); (2) Oracle's framing was a loose paraphrase — tightened to the memo's own phrase, "if we had known the truth all along," in the intro, the chart legend, and a new caption near the summary metrics; (3) the running confidence readout showed only an abstract CI-width number — changed to show the actual interval bounds (e.g. `[-2.8, -0.3] → [-1.9, -1.5]`) as the headline value, matching the memo's own example format.
+
+**Phase 5 (all sub-phases 5a-5f) is now complete.**
 
 ## Outstanding / Low Priority
 
