@@ -26,6 +26,15 @@ from metrics import format_currency, format_pct
 
 st.set_page_config(page_title="Decision Replay -- Nova Retail", page_icon="🔁", layout="wide")
 
+with st.sidebar:
+    st.markdown("### Nova Retail")
+    st.caption("Applied Data Science Portfolio — Project 1")
+    st.link_button(
+        "View source on GitHub",
+        "https://github.com/kpratheek5899/Applied-Data-Science-Portfolio/tree/main/01-retail-pricing-optimization",
+        width="stretch",
+    )
+
 COLOR_ACTUAL = "#52514e"  # secondary ink
 COLOR_OPTIMIZER = "#2a78d6"  # categorical slot 1
 COLOR_GRID = "#e1e0d9"

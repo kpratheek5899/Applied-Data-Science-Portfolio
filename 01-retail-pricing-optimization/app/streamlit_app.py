@@ -30,7 +30,15 @@ def _load_summary():
 
 n_skus, date_lo, date_hi = _load_summary()
 
+GITHUB_URL = "https://github.com/kpratheek5899/Applied-Data-Science-Portfolio/tree/main/01-retail-pricing-optimization"
+
+with st.sidebar:
+    st.markdown("### Nova Retail")
+    st.caption("Applied Data Science Portfolio — Project 1")
+    st.link_button("View source on GitHub", GITHUB_URL, width="stretch")
+
 st.title("Nova Retail — Pricing & Capacity Optimization Engine")
+st.caption(f"Portfolio project by [kpratheek5899]({GITHUB_URL}) — full source on GitHub.")
 
 st.markdown(
     """
@@ -97,6 +105,7 @@ st.markdown(
 
 st.page_link("pages/1_Scenario_Explorer.py", label="→ Scenario Explorer", icon="🎛️")
 st.page_link("pages/2_Decision_Replay.py", label="→ Decision Replay", icon="🔁")
+st.page_link("pages/3_Adaptive_Learning.py", label="→ Adaptive Learning (Thompson Sampling)", icon="🧠")
 
 st.caption(
     "Nova Retail is a portfolio project demonstrating a complete applied decision-science "

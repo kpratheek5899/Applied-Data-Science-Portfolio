@@ -34,6 +34,15 @@ from metrics import before_after_table, risk_tier, scenario_summary_line, format
 
 st.set_page_config(page_title="Scenario Explorer -- Nova Retail", page_icon="🎛️", layout="wide")
 
+with st.sidebar:
+    st.markdown("### Nova Retail")
+    st.caption("Applied Data Science Portfolio — Project 1")
+    st.link_button(
+        "View source on GitHub",
+        "https://github.com/kpratheek5899/Applied-Data-Science-Portfolio/tree/main/01-retail-pricing-optimization",
+        width="stretch",
+    )
+
 # Palette (see .claude skill "dataviz" reference/palette.md) -- categorical
 # slots assigned in fixed order, reference lines use ink/status colors, not
 # additional categorical hues.
