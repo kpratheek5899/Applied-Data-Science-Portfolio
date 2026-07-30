@@ -84,7 +84,15 @@ st.caption(
 # ---------------------------------------------------------------------------
 
 presets = build_predefined_scenarios(sku_master, daily)
-starting_point = st.selectbox("Starting point", ["Custom"] + list(presets.keys()))
+starting_point = st.selectbox(
+    "Starting point",
+    ["Custom"] + list(presets.keys()),
+    help=(
+        "Presets only *pre-fill* the inputs below with a real historical (SKU, day) row matching "
+        "that business situation -- they're a starting point, not a separate answer. Every input "
+        "stays fully editable afterward, and 'Custom' starts you from a blank slate."
+    ),
+)
 
 if starting_point == "Custom":
     prefill_sku = sku_options[0]
@@ -109,11 +117,25 @@ key_suffix = starting_point.replace(" ", "_")
 input_col1, input_col2, input_col3 = st.columns(3)
 
 with input_col1:
-    sku = st.selectbox("SKU", sku_options, index=sku_options.index(prefill_sku), key=f"sku_{key_suffix}")
+    sku = st.selectbox(
+        "SKU",
+        sku_options,
+        index=sku_options.index(prefill_sku),
+        key=f"sku_{key_suffix}",
+        help="Which product to analyze. Each SKU has its own cost and estimated price elasticity -- the recommendation is specific to this one product, not the catalog as a whole.",
+    )
 
 with input_col2:
     use_range = st.checkbox(
-        "Use a date range", value=(prefill_start != prefill_end), key=f"use_range_{key_suffix}"
+        "Use a date range",
+        value=(prefill_start != prefill_end),
+        key=f"use_range_{key_suffix}",
+        help=(
+            "Off: analyze a single real day, current price/units come from that day. On: analyze a "
+            "whole window -- the optimizer then recommends *one* price held constant across every "
+            "day in the range, and 'current price' becomes the window's average actual price, not "
+            "any single day's."
+        ),
     )
 
 with input_col3:
@@ -123,6 +145,12 @@ with input_col3:
         index=objective_options.index(prefill_objective),
         format_func=lambda o: objective_labels[o],
         key=f"objective_{key_suffix}",
+        help=(
+            "Maximize Profit: highest (price-cost)*units. Maximize Revenue: highest price*units "
+            "(can recommend a *lower* price than profit-max when demand is price-sensitive). "
+            "Protect Inventory: maximize profit, but never recommend a price expected to sell more "
+            "units than you actually have in stock."
+        ),
     )
 
 if use_range:
@@ -132,6 +160,7 @@ if use_range:
         min_value=date_lo.date(),
         max_value=date_hi.date(),
         key=f"date_range_{key_suffix}",
+        help="Bound to the real min/max date in the simulated dataset -- you can't pick a range the data doesn't cover.",
     )
     if isinstance(date_range, tuple) and len(date_range) == 2:
         start_date, end_date = pd.Timestamp(date_range[0]), pd.Timestamp(date_range[1])
@@ -147,15 +176,46 @@ else:
         min_value=date_lo.date(),
         max_value=date_hi.date(),
         key=f"single_date_{key_suffix}",
+        help="A real historical day for this SKU -- 'current price/units' below come directly from what actually happened on this day.",
     )
     start_date = end_date = pd.Timestamp(single_date)
 
 with st.expander("Constraints (optional)"):
     c1, c2, c3, c4 = st.columns(4)
-    price_min = c1.number_input("Min price ($)", min_value=0.0, value=0.0, step=1.0, key=f"pmin_{key_suffix}")
-    price_max = c2.number_input("Max price ($, 0 = no cap)", min_value=0.0, value=0.0, step=1.0, key=f"pmax_{key_suffix}")
-    min_margin = c3.slider("Min margin", 0.0, 0.9, 0.10, step=0.01, key=f"margin_{key_suffix}")
-    max_change = c4.slider("Max price change", 0.05, 2.0, 0.50, step=0.05, key=f"maxchange_{key_suffix}")
+    price_min = c1.number_input(
+        "Min price ($)",
+        min_value=0.0,
+        value=0.0,
+        step=1.0,
+        key=f"pmin_{key_suffix}",
+        help="A hard floor -- the optimizer will never recommend below this, no matter what the math wants. 0 = no floor beyond cost/margin. Use this for a real business rule (e.g. a MAP floor), not the generic default guardrail.",
+    )
+    price_max = c2.number_input(
+        "Max price ($, 0 = no cap)",
+        min_value=0.0,
+        value=0.0,
+        step=1.0,
+        key=f"pmax_{key_suffix}",
+        help="A hard ceiling -- the optimizer will never recommend above this. 0 = no cap beyond the Max price change band. If the true optimum lies above whatever you set here, the recommendation will sit exactly on this number -- watch for the 'capped by Max price' note below the recommendation.",
+    )
+    min_margin = c3.slider(
+        "Min margin",
+        0.0,
+        0.9,
+        0.10,
+        step=0.01,
+        key=f"margin_{key_suffix}",
+        help="Minimum (price − cost) / price. Translates to a price floor of cost / (1 − margin) -- e.g. 0.10 on a $700 cost means never price below $778.",
+    )
+    max_change = c4.slider(
+        "Max price change",
+        0.05,
+        2.0,
+        0.50,
+        step=0.05,
+        key=f"maxchange_{key_suffix}",
+        help="A generic ±% guardrail around the current/average price, used only when you haven't set a real Min/Max price above. 0.50 = never move more than 50% in either direction. This is often what actually caps a recommendation by default -- set explicit Min/Max price instead if you want the model reasoning within your real business bounds.",
+    )
     inventory_override = st.number_input(
         "Available inventory override (0 = use this day's actual starting inventory)",
         min_value=0.0,
