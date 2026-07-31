@@ -152,15 +152,23 @@ d4.metric(
     help="Units the optimizer's price would have sold, realized against the true simulator model -- the one place this app is allowed to use ground truth, and only to score the outcome, never to decide the price.",
 )
 
-e1, e2, e3, e4 = st.columns(4)
+f1, f2, f3, f4 = st.columns(4)
+f1.metric("Actual revenue (day)", format_currency(selected.actual_revenue))
+f2.metric(
+    "Optimizer revenue (day)",
+    format_currency(selected.optimizer_revenue),
+    help="price x units for the optimizer's trajectory. Under Maximize Revenue this can beat actual revenue even while optimizer profit falls -- price and margin move in opposite directions for price-sensitive (elastic) demand.",
+)
+f3.metric("Actual profit (day)", format_currency(selected.actual_profit))
+f4.metric("Optimizer profit (day)", format_currency(selected.optimizer_profit))
+
+e1, e2 = st.columns(2)
 e1.metric("Actual ending inventory", f"{selected.actual_ending_inventory:,.0f}")
 e2.metric(
     "Optimizer ending inventory",
     f"{selected.optimizer_ending_inventory:,.0f}",
     help="Inventory left over under the optimizer's own trajectory -- this is the closed loop: today's number reflects yesterday's optimizer decision, not the fixed historical inventory.",
 )
-e3.metric("Actual profit (day)", format_currency(selected.actual_profit))
-e4.metric("Optimizer profit (day)", format_currency(selected.optimizer_profit))
 
 if selected.optimizer_stockout:
     st.error("Optimizer trajectory stocked out on this day.")

@@ -141,6 +141,17 @@ class TestDecisionReplay(unittest.TestCase):
         self.assertEqual(list(at.exception), [])
         self.assertGreater(len(at.get("metric")), 0)
 
+    def test_revenue_shown_alongside_price_units_profit_inventory(self):
+        # Revenue was computed in replay_engine.py from the start but wasn't
+        # surfaced as its own KPI -- a real gap, since Maximize Revenue can
+        # raise revenue while profit falls (elastic demand), which is
+        # invisible without a revenue metric on screen.
+        at = AppTest.from_file(DECISION_REPLAY_PAGE)
+        at.run(timeout=30)
+        labels = {m.label for m in at.get("metric")}
+        self.assertIn("Actual revenue (day)", labels)
+        self.assertIn("Optimizer revenue (day)", labels)
+
     def test_stepping_through_days_and_switching_sku_objective_no_exceptions(self):
         at = AppTest.from_file(DECISION_REPLAY_PAGE)
         at.run(timeout=30)
