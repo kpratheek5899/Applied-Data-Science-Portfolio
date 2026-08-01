@@ -174,24 +174,38 @@ if selected.optimizer_stockout:
     st.error("Optimizer trajectory stocked out on this day.")
 
 # ---------------------------------------------------------------------------
-# Parallel cumulative trajectories -- small multiples (profit/inventory
-# don't share a scale, per the dataviz skill's "no dual axis" rule).
+# Parallel cumulative trajectories -- small multiples (revenue/profit/
+# inventory don't share a scale or unit, per the dataviz skill's "no dual
+# axis" rule -- each gets its own panel even though revenue and profit are
+# both dollars, since plotting 4 lines on one axis would bury the profit
+# comparison under the larger revenue numbers).
 # ---------------------------------------------------------------------------
 
 st.markdown("##### Actual vs. optimizer-driven pricing over the window")
+st.caption(
+    "**Cumulative revenue/profit ($):** each day's revenue or profit added to the running total from "
+    "day 1 through the day currently selected (dotted vertical line) -- not a daily amount, the "
+    "window-to-date sum. **Ending inventory:** units left in stock at the end of each day under that "
+    "trajectory's own decisions -- the optimizer's line reflects every one of its own prior days' "
+    "pricing choices, not the fixed historical record."
+)
 
-fig, (ax_profit, ax_inventory) = plt.subplots(2, 1, figsize=(9, 6), sharex=True, facecolor=COLOR_SURFACE)
+fig, (ax_revenue, ax_profit, ax_inventory) = plt.subplots(3, 1, figsize=(9, 9), sharex=True, facecolor=COLOR_SURFACE)
 
-for ax in (ax_profit, ax_inventory):
+for ax in (ax_revenue, ax_profit, ax_inventory):
     ax.set_facecolor(COLOR_SURFACE)
     ax.grid(color=COLOR_GRID, linewidth=0.8)
     ax.spines[["top", "right"]].set_visible(False)
     ax.axvline(selected.date, color="#898781", linestyle=":", linewidth=1.2)
 
-ax_profit.plot(df["date"], df["actual_cumulative_profit"], color=COLOR_ACTUAL, linewidth=2, label="Actual (historical)")
-ax_profit.plot(df["date"], df["optimizer_cumulative_profit"], color=COLOR_OPTIMIZER, linewidth=2, label="Optimizer-driven")
+ax_revenue.plot(df["date"], df["actual_cumulative_revenue"], color=COLOR_ACTUAL, linewidth=2, label="Actual (historical)")
+ax_revenue.plot(df["date"], df["optimizer_cumulative_revenue"], color=COLOR_OPTIMIZER, linewidth=2, label="Optimizer-driven")
+ax_revenue.set_ylabel("Cumulative revenue ($)")
+ax_revenue.legend(loc="best", frameon=False)
+
+ax_profit.plot(df["date"], df["actual_cumulative_profit"], color=COLOR_ACTUAL, linewidth=2)
+ax_profit.plot(df["date"], df["optimizer_cumulative_profit"], color=COLOR_OPTIMIZER, linewidth=2)
 ax_profit.set_ylabel("Cumulative profit ($)")
-ax_profit.legend(loc="best", frameon=False)
 
 ax_inventory.plot(df["date"], df["actual_ending_inventory"], color=COLOR_ACTUAL, linewidth=2)
 ax_inventory.plot(df["date"], df["optimizer_ending_inventory"], color=COLOR_OPTIMIZER, linewidth=2)
