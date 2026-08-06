@@ -116,11 +116,20 @@ def run_closed_loop_replay(
     risk_aversion: float = 0.3,
     min_margin: float | None = None,
     max_price_change_pct: float | None = None,
+    inventory_override: float | None = None,
 ) -> list[ReplayDay]:
     """
     Step through `n_days` starting at `start_date` for `sku`, building both
     trajectories. Uses `recommend_price_bayesian` if `elasticity_samples` is
     given, else the point-estimate `recommend_price`.
+
+    `inventory_override`, if given, replaces the optimizer trajectory's
+    Day-1 starting inventory (real historical stock otherwise). It can only
+    ever seed the *starting point* -- every day after Day 1 is already
+    determined by the closed loop itself (the optimizer's own prior
+    decisions plus replenishment), not by history, so there's no
+    "day N override" to speak of. The "actual" trajectory is a pure
+    historical passthrough and is never affected by this.
     """
     start_date = pd.Timestamp(start_date)
     window_dates = pd.date_range(start_date, periods=n_days, freq="D")
@@ -150,8 +159,12 @@ def run_closed_loop_replay(
         actual_price = float(row["actual_price"])
 
         if optimizer_inventory is None:
-            # Day 1: same actual starting inventory as the historical trajectory.
-            optimizer_inventory = actual_starting_inventory
+            # Day 1: same actual starting inventory as the historical
+            # trajectory, unless overridden to explore a different stock
+            # position.
+            optimizer_inventory = (
+                inventory_override if inventory_override is not None else actual_starting_inventory
+            )
         else:
             optimizer_inventory = apply_daily_replenishment(
                 optimizer_inventory, actual_starting_inventory, prev_actual_ending_inventory

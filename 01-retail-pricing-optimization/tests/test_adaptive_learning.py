@@ -131,6 +131,13 @@ class TestAdaptiveSimulationInvariants(unittest.TestCase):
             for day in days:
                 self.assertLessEqual(day.units, day.starting_inventory + 1e-6)
 
+    def test_inventory_override_replaces_day_one_starting_inventory_for_all_variants(self):
+        result = run_adaptive_simulation(
+            self.sku_master, self.daily, TEST_SKU, TEST_START, n_days=5, random_seed=7, inventory_override=500.0
+        )
+        for days in (result.static, result.thompson, result.oracle):
+            self.assertEqual(days[0].starting_inventory, 500.0)
+
     def test_window_past_dataset_end_raises(self):
         with self.assertRaises(ValueError):
             run_adaptive_simulation(self.sku_master, self.daily, TEST_SKU, "2025-12-28", n_days=10)

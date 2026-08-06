@@ -153,7 +153,15 @@ def run_adaptive_simulation(
     random_seed: int = 42,
     min_margin: float | None = None,
     max_price_change_pct: float | None = None,
+    inventory_override: float | None = None,
 ) -> AdaptiveSimulationResult:
+    """
+    `inventory_override`, if given, replaces Day 1's starting inventory
+    (real historical stock otherwise) for all three variants uniformly --
+    keeping the three-way comparison fair. Only Day 1 can be overridden;
+    every later day is already determined by each variant's own prior
+    decisions plus replenishment, not by history.
+    """
     start_date = pd.Timestamp(start_date)
     window_dates = pd.date_range(start_date, periods=n_days, freq="D")
 
@@ -174,7 +182,9 @@ def run_adaptive_simulation(
     first_row = sku_daily.loc[window_dates[0]]
     start_price = float(first_row["actual_price"])
     start_units = float(first_row["actual_units"])
-    start_inventory = float(first_row["starting_inventory"])
+    start_inventory = (
+        inventory_override if inventory_override is not None else float(first_row["starting_inventory"])
+    )
 
     # Price bounds are fixed for the whole window, anchored to the *starting*
     # price -- not `max_price_change_pct` relative to each day's rolling

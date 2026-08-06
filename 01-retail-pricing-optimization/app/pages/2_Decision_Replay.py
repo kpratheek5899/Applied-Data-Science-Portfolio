@@ -148,6 +148,19 @@ risk_aversion = st.slider(
         "way (a hard rule, not a trade-off)."
     ),
 )
+inventory_override = st.number_input(
+    "Available inventory override (0 = use Day 1's actual starting inventory)",
+    min_value=0.0,
+    value=0.0,
+    step=10.0,
+    help=(
+        "Available inventory = how many units the optimizer trajectory actually has in stock to sell. "
+        "This is a closed loop -- Day 2 onward already evolves from the model's own decisions, not "
+        "history, so this override can only change where Day 1 starts. Type a number here to test 'what "
+        "if we started with more/less stock.' 0 = use the real historical Day-1 amount. Only affects the "
+        "optimizer trajectory, never the actual (historical) one."
+    ),
+)
 
 elasticity_samples = get_elasticity_samples(posterior_samples, sku) if use_bayesian else None
 
@@ -161,6 +174,7 @@ try:
         objective=objective,
         elasticity_samples=elasticity_samples,
         risk_aversion=risk_aversion,
+        inventory_override=inventory_override if inventory_override > 0 else None,
     )
 except ValueError as e:
     st.error(str(e))

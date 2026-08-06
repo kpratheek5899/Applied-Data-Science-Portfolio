@@ -130,6 +130,19 @@ random_seed = col6.number_input(
     step=1,
     help="Controls every random draw in the simulation (Thompson Sampling's daily elasticity draws). Same seed = same run every time; change it to see a different, equally valid random trajectory.",
 )
+inventory_override = st.number_input(
+    "Available inventory override (0 = use Day 1's actual starting inventory)",
+    min_value=0.0,
+    value=0.0,
+    step=10.0,
+    help=(
+        "Available inventory = how many units are in stock to sell. All three variants (Static/Thompson/"
+        "Oracle) start Day 1 with the same amount -- this override changes that starting amount for all "
+        "of them equally, so the comparison stays fair. Every day after Day 1 already evolves from each "
+        "variant's own decisions, not history, so only Day 1 can be overridden. 0 = use the real "
+        "historical Day-1 amount."
+    ),
+)
 
 run_clicked = st.button(
     "Run simulation",
@@ -137,7 +150,7 @@ run_clicked = st.button(
     help="Recomputes and caches the full trajectory for the settings above. Scrubbing the Day slider afterward is free -- it doesn't recompute anything, it just replays the cached result.",
 )
 
-cache_key = (sku, str(start_date), n_days, objective, prior_strength, int(random_seed))
+cache_key = (sku, str(start_date), n_days, objective, prior_strength, int(random_seed), inventory_override)
 if "adaptive_last_key" not in st.session_state:
     st.session_state["adaptive_last_key"] = None
 
@@ -146,9 +159,17 @@ if run_clicked or st.session_state["adaptive_last_key"] is None:
 
 
 @st.cache_data
-def _run_cached(sku, start_date, n_days, objective, prior_strength, random_seed):
+def _run_cached(sku, start_date, n_days, objective, prior_strength, random_seed, inventory_override):
     return run_adaptive_simulation(
-        sku_master, daily, sku, start_date, n_days, objective=objective, prior_strength=prior_strength, random_seed=random_seed
+        sku_master,
+        daily,
+        sku,
+        start_date,
+        n_days,
+        objective=objective,
+        prior_strength=prior_strength,
+        random_seed=random_seed,
+        inventory_override=inventory_override if inventory_override > 0 else None,
     )
 
 

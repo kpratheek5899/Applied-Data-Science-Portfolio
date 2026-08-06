@@ -66,6 +66,25 @@ class TestClosedLoop(unittest.TestCase):
         )
         self.assertEqual(days[0].optimizer_starting_inventory, days[0].actual_starting_inventory)
 
+    def test_inventory_override_replaces_day_one_starting_inventory(self):
+        days_default = run_closed_loop_replay(
+            self.sku_master, self.daily, "SKU_003", self.start_date, n_days=3, objective="maximize_profit"
+        )
+        days_override = run_closed_loop_replay(
+            self.sku_master,
+            self.daily,
+            "SKU_003",
+            self.start_date,
+            n_days=3,
+            objective="maximize_profit",
+            inventory_override=500.0,
+        )
+        self.assertEqual(days_override[0].optimizer_starting_inventory, 500.0)
+        # The actual (historical) trajectory is a pure passthrough -- must
+        # be completely unaffected by the override.
+        self.assertEqual(days_override[0].actual_starting_inventory, days_default[0].actual_starting_inventory)
+        self.assertEqual(days_override[0].actual_units, days_default[0].actual_units)
+
     def test_day_two_inventory_reflects_day_one_decision_not_fixed_history(self):
         # On a day with no replenishment, optimizer Day-2 starting inventory
         # must equal Day-1's own ending inventory (the closed-loop part) --

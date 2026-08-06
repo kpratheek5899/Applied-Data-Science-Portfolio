@@ -169,6 +169,17 @@ class TestDecisionReplay(unittest.TestCase):
         at.checkbox[0].set_value(False).run(timeout=30)
         self.assertEqual(list(at.exception), [])
 
+    def test_inventory_override_changes_optimizer_ending_inventory(self):
+        at = AppTest.from_file(DECISION_REPLAY_PAGE)
+        at.run(timeout=30)
+        default_ending_inv = [m for m in at.get("metric") if m.label == "Optimizer ending inventory"][0].value
+
+        override = [n for n in at.number_input if n.label and n.label.startswith("Available inventory override")][0]
+        override.set_value(50.0).run(timeout=30)
+        self.assertEqual(list(at.exception), [])
+        new_ending_inv = [m for m in at.get("metric") if m.label == "Optimizer ending inventory"][0].value
+        self.assertNotEqual(new_ending_inv, default_ending_inv)
+
     def test_growing_window_clamps_start_date_instead_of_erroring(self):
         # The start-date picker's max_value is derived from the currently
         # selected window length, so widening the window past what the
@@ -215,6 +226,14 @@ class TestAdaptiveLearning(unittest.TestCase):
         at.button[0].click().run(timeout=60)
         self.assertEqual(list(at.exception), [])
         self.assertGreater(len(at.get("metric")), 0)
+
+    def test_inventory_override_changes_day_one_starting_inventory(self):
+        at = AppTest.from_file(ADAPTIVE_LEARNING_PAGE)
+        at.run(timeout=60)
+        override = [n for n in at.number_input if n.label and n.label.startswith("Available inventory override")][0]
+        override.set_value(50.0).run(timeout=60)
+        at.button[0].click().run(timeout=60)
+        self.assertEqual(list(at.exception), [])
 
     def test_growing_window_clamps_start_date(self):
         at = AppTest.from_file(ADAPTIVE_LEARNING_PAGE)

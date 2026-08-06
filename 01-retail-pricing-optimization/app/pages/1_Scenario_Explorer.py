@@ -222,7 +222,11 @@ with st.expander("Constraints (optional)"):
         value=0.0,
         step=10.0,
         key=f"inventory_{key_suffix}",
-        help="Lower this to explore a tighter stock position than what actually happened historically.",
+        help=(
+            "Available inventory = how many units you actually have in stock to sell. By default the "
+            "app uses the real historical amount. Type a different number here to test 'what if we had "
+            "more/less stock' -- most useful with the Protect Inventory objective. 0 = use the real amount."
+        ),
     )
 
 st.markdown("##### Uncertainty")
