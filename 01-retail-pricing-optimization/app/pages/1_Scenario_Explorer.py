@@ -236,7 +236,7 @@ use_bayesian = bayes_col.checkbox(
     value=True,
     key=f"bayes_{key_suffix}",
     help=(
-        "Draws from Phase 3's fitted posterior over this SKU's elasticity instead of a single "
+        "Draws from this SKU's fitted posterior distribution over elasticity instead of a single "
         "point estimate, and optimizes expected profit/revenue net of stockout risk."
     ),
 )

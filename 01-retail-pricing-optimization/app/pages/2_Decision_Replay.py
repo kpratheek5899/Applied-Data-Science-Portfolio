@@ -127,7 +127,7 @@ use_bayesian = col5.checkbox(
     "Use Bayesian (posterior-based) optimization",
     value=True,
     help=(
-        "Draws from Phase 3's fitted posterior over this SKU's elasticity instead of a single point "
+        "Draws from this SKU's fitted posterior distribution over elasticity instead of a single point "
         "estimate, every day, so the decision reflects genuine estimation uncertainty rather than one "
         "fixed number."
     ),

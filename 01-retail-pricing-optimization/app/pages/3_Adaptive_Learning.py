@@ -56,7 +56,7 @@ st.info(
     "(labeled below as *\"if we had known the truth all along\"* -- a theoretical upper bound for "
     "comparison, not something this app claims to achieve) and the outcome-realization step do. "
     "Before each day's outcome updates the belief, promotion, event, and day-of-week effects are removed "
-    "from it using effect sizes already estimated in Phases 2-3, so they don't get mistaken for price "
+    "from it using effect sizes estimated separately ahead of time, so they don't get mistaken for price "
     "sensitivity -- elasticity itself is the only thing still being learned online."
 )
 
