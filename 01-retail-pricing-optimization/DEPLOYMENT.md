@@ -63,6 +63,27 @@ directory placement is the mechanism that actually works.
      window (confirm the date picker won't let you pick an invalid
      start-date/window combination).
 
+## After pushing a change to a `src/` file: reboot, don't just wait
+
+The automatic **"Updated app!"** you see in the logs after every push is a
+*lightweight* reload -- it re-pulls the repo and re-runs the page scripts,
+but doesn't reliably force Python to re-import modules under `src/` that
+were already loaded into memory earlier in the process's lifetime (they're
+imported by bare name via a `sys.path.insert` at the top of each page, not
+as a version-tracked package). A real incident: pushing a new parameter
+added to `src/replay_engine.py` produced `TypeError: ... got an unexpected
+keyword argument` on the live app, even though the page file calling it
+(already updated) and the GitHub repo (verified via direct diff) were both
+correct -- the running process just hadn't re-imported the changed module.
+
+**Fix:** after any push that touches a file under `src/`, use **Manage
+app → Reboot app**, not just the automatic update. Reboot kills and
+restarts the whole process, which guarantees a fresh import of everything.
+Changes confined to `app/pages/*.py` or `app/streamlit_app.py` alone
+haven't shown this problem (those *are* the files Streamlit's own script
+re-run mechanism watches directly) -- it's specifically `src/` module
+changes that need the extra step.
+
 ## If the build fails
 
 - **Dependency error mentioning `pymc`, `cvxpy`, or an encoding issue** —
