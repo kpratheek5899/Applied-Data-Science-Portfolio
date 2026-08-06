@@ -49,15 +49,14 @@ COLOR_SURFACE = "#fcfcfb"
 COLOR_TRUE = "#d03b3b"  # status critical, reference-only marker
 
 st.title("Adaptive Learning: Watch the Model Learn")
-st.warning(
-    "This mode starts each SKU's price recommendation from a **deliberately weak, generic belief** "
-    "about its elasticity (not Phase 2/3's well-fit estimate -- that would leave nothing to learn), and "
-    "narrows that belief day by day using **Thompson Sampling**, purely from observing the outcomes of "
-    "its own pricing decisions. The decision each day never sees the true elasticity -- only Oracle "
-    "(labeled clearly below as *\"if we had known the truth all along\"* -- a theoretical upper bound for "
+st.info(
+    "This mode starts each SKU's price recommendation from a weak prior belief about its elasticity, "
+    "and narrows that belief day by day using **Thompson Sampling**, purely from observing the outcomes "
+    "of its own pricing decisions. The decision each day never sees the true elasticity -- only Oracle "
+    "(labeled below as *\"if we had known the truth all along\"* -- a theoretical upper bound for "
     "comparison, not something this app claims to achieve) and the outcome-realization step do. "
-    "The underlying model is deliberately simple (no controls for promotion/event/day-of-week -- see "
-    "`src/adaptive_simulation.py` for why), so treat this as a methodology demo, not a production forecast."
+    "The underlying model is simple (no controls for promotion, event, or day-of-week effects), so treat "
+    "this as a methodology demo, not a production forecast."
 )
 
 sku_master = load_sku_master()
@@ -76,7 +75,7 @@ sku = col1.selectbox(
     "SKU",
     sku_options,
     index=sku_options.index("SKU_003") if "SKU_003" in sku_options else 0,
-    help="Which product all three variants (Static, Thompson Sampling, Oracle) will price, starting from the same day and the same deliberately weak belief.",
+    help="Which product all three variants (Static, Thompson Sampling, Oracle) will price, starting from the same day and the same weak belief.",
 )
 n_days = col2.slider(
     "Window length (days)",
@@ -210,7 +209,7 @@ conf1.metric(
     f"[{day1_ts_day.posterior_ci_low:.2f}, {day1_ts_day.posterior_ci_high:.2f}]",
     f"width {day1_width:.2f}",
     delta_color="off",
-    help="The starting (Day 1) 90% credible interval for elasticity, before any learning -- deliberately wide.",
+    help="The starting (Day 1) 90% credible interval for elasticity, before any learning -- still wide.",
 )
 conf2.metric(
     f"Day {day_index + 1}: elasticity 90% CI",

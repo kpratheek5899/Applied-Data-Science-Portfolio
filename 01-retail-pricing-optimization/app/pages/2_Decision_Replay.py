@@ -60,12 +60,11 @@ objective_labels = {
 }
 
 st.title("Decision Replay")
-st.warning(
+st.info(
     "This closed loop only works because Nova Retail is a synthetic economy with a known true "
     "demand model. The optimizer's day-to-day **decisions** use only the estimated model (same as "
     "Scenario Explorer) -- but the **realized outcome** of each decision is generated from the true "
-    "simulator model, which a real business could never actually observe. That gap is exactly why "
-    "the estimation work in Phases 2-3 of this project matters."
+    "simulator model, which a real business could never actually observe."
 )
 
 col1, col2, col3 = st.columns(3)
