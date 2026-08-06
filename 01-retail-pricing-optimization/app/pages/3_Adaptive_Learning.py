@@ -72,12 +72,29 @@ objective_labels = {
 }
 
 col1, col2, col3 = st.columns(3)
-sku = col1.selectbox("SKU", sku_options, index=sku_options.index("SKU_003") if "SKU_003" in sku_options else 0)
-n_days = col2.slider("Window length (days)", 5, 30, 15, key="adaptive_n_days")
+sku = col1.selectbox(
+    "SKU",
+    sku_options,
+    index=sku_options.index("SKU_003") if "SKU_003" in sku_options else 0,
+    help="Which product all three variants (Static, Thompson Sampling, Oracle) will price, starting from the same day and the same deliberately weak belief.",
+)
+n_days = col2.slider(
+    "Window length (days)",
+    5,
+    30,
+    15,
+    key="adaptive_n_days",
+    help="How many days the simulation runs. Longer windows give Thompson Sampling more days to learn and narrow its belief -- watch how its regret line bends more with a longer window.",
+)
 
 max_start_date = date_hi - pd.Timedelta(days=n_days - 1)
 _start_key = "adaptive_start_date"
-date_kwargs = dict(min_value=date_lo.date(), max_value=max_start_date.date(), key=_start_key)
+date_kwargs = dict(
+    min_value=date_lo.date(),
+    max_value=max_start_date.date(),
+    key=_start_key,
+    help="Bound to the real dataset and the current window length, so you can't pick a start date the window would run past.",
+)
 if _start_key not in st.session_state:
     date_kwargs["value"] = (date_hi - pd.Timedelta(days=n_days + 30)).date()
 elif pd.Timestamp(st.session_state[_start_key]) > max_start_date:
@@ -85,7 +102,18 @@ elif pd.Timestamp(st.session_state[_start_key]) > max_start_date:
 start_date = col3.date_input("Start date", **date_kwargs)
 
 col4, col5, col6 = st.columns(3)
-objective = col4.selectbox("Objective", objective_options, format_func=lambda o: objective_labels[o])
+objective = col4.selectbox(
+    "Objective",
+    objective_options,
+    format_func=lambda o: objective_labels[o],
+    help=(
+        "Maximize Profit: highest (price − cost) x units, each day. Maximize Revenue: highest price x "
+        "units -- can pick a lower price than Maximize Profit when demand is price-sensitive. Protect "
+        "Inventory: maximize profit, but never recommend a price expected to sell more units than that "
+        "variant currently has in stock. All three variants (Static/Thompson/Oracle) use the same "
+        "objective, so the comparison isolates the effect of learning, not a difference in goals."
+    ),
+)
 prior_strength = col5.slider(
     "Starting confidence",
     0.5,
@@ -94,9 +122,20 @@ prior_strength = col5.slider(
     step=0.5,
     help="Lower = wider, weaker day-1 belief about elasticity -> more room to visibly learn. Higher = starts more confident.",
 )
-random_seed = col6.number_input("Random seed", min_value=0, max_value=9999, value=7, step=1)
+random_seed = col6.number_input(
+    "Random seed",
+    min_value=0,
+    max_value=9999,
+    value=7,
+    step=1,
+    help="Controls every random draw in the simulation (Thompson Sampling's daily elasticity draws). Same seed = same run every time; change it to see a different, equally valid random trajectory.",
+)
 
-run_clicked = st.button("Run simulation", type="primary")
+run_clicked = st.button(
+    "Run simulation",
+    type="primary",
+    help="Recomputes and caches the full trajectory for the settings above. Scrubbing the Day slider afterward is free -- it doesn't recompute anything, it just replays the cached result.",
+)
 
 cache_key = (sku, str(start_date), n_days, objective, prior_strength, int(random_seed))
 if "adaptive_last_key" not in st.session_state:
@@ -128,7 +167,17 @@ st.divider()
 # Step through days
 # ---------------------------------------------------------------------------
 
-day_index = st.slider("Day", 1, n_actual_days, n_actual_days, key="adaptive_day_scrub") - 1
+day_index = (
+    st.slider(
+        "Day",
+        1,
+        n_actual_days,
+        n_actual_days,
+        key="adaptive_day_scrub",
+        help="Scrub through the already-simulated window to see the belief and metrics as of that day. This is free -- it replays the cached simulation, it doesn't rerun anything.",
+    )
+    - 1
+)
 selected_ts_day = result.thompson[day_index]
 day1_ts_day = result.thompson[0]
 
@@ -270,7 +319,11 @@ s2.metric(
     format_currency(totals.loc["thompson", "profit"]),
     help="Updates its belief every day from the outcome of its own pricing decision -- this is the policy that's actually learning.",
 )
-s3.metric("Oracle total profit", format_currency(totals.loc["oracle", "profit"]))
+s3.metric(
+    "Oracle total profit",
+    format_currency(totals.loc["oracle", "profit"]),
+    help="Uses the TRUE elasticity every day -- a theoretical ceiling for comparison, not a real decision-maker (a real business never gets to see this).",
+)
 st.caption("Oracle: \"if we had known the truth all along\" -- a theoretical ceiling for comparison, not a real decision-maker.")
 
 with st.expander("Full day-by-day table"):

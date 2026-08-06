@@ -244,7 +244,13 @@ risk_aversion = risk_col.slider(
     step=0.05,
     key=f"risk_{key_suffix}",
     disabled=not use_bayesian,
-    help="Higher values trade expected profit/revenue for a lower probability of stocking out.",
+    help=(
+        "Higher = safer: picks prices with a LOWER chance of running out of stock, even if expected "
+        "profit/revenue is a bit smaller. Lower = bolder: chases the HIGHEST expected profit/revenue, "
+        "even if that means a higher chance of running out of stock. No effect when Objective is "
+        "Protect Inventory -- that objective already blocks stockout risk a different way (a hard "
+        "rule, not a trade-off)."
+    ),
 )
 
 # ---------------------------------------------------------------------------
