@@ -28,14 +28,20 @@ uses for Decision Replay) --
   invariant, not just "should be near zero" -- see
   `tests/test_adaptive_learning.py`.
 
-Deliberate simplification, not an oversight: the sequential belief is a
-plain `log_units ~ alpha + beta*log_price` regression with no controls for
-promotion/event/day-of-week (see `bayesian_learning.py`'s module docstring
-for why -- closed-form/no-MCMC was an explicit engineering constraint for
-interactive use). Notebook 03 showed this exact "no controls" specification
-is confounded by promotions/events over a *full 2-year panel*; over the
-short (10-30 day) adaptive-learning window here that's a real but bounded
-risk, flagged in the UI rather than hidden.
+The sequential belief itself is still a plain `log_units ~ alpha +
+beta*log_price` regression with no free parameters for promotion/event/
+day-of-week (see `bayesian_learning.py`'s module docstring for why --
+closed-form/no-MCMC was an explicit engineering constraint for interactive
+use, and a second free parameter proved unidentifiable in practice). But
+each day's `(dlog_price, dlog_units)` pair fed into that regression is now
+residualized first: `bayesian_learning.control_log_effect` subtracts
+Phase 2/3's already-fitted promotion/event/day-of-week effect sizes (loaded
+from `data/app/control_effects.csv`, computed once offline over the full
+two-year panel) from the change in log(units) before it reaches
+`update_posterior`. This is the same fix a difference-in-differences
+estimate uses against calendar/promotional confounds -- control for them
+with known effect sizes rather than estimate them from a short, noisy
+window. Only elasticity itself is still being learned online.
 
 Prior seeding: the prior mean is a fixed, genuinely uninformed guess
 (`GENERIC_PRIOR_MEAN_ELASTICITY`, -1.0 -- "unit elastic"), not looked up
@@ -58,18 +64,34 @@ import pandas as pd
 
 from bayesian_learning import (
     NIGPosterior,
+    ControlEffects,
     build_prior,
     update_posterior,
     sample_theta,
     posterior_mean_beta,
     posterior_sd_beta,
     credible_interval_beta,
+    control_log_effect,
+    parse_control_effects,
 )
+from data_loader import load_control_effects
 from optimization import optimize_price
 from replay_engine import realize_true_outcome, apply_daily_replenishment
 
 MAX_ELASTICITY_RESAMPLE_ATTEMPTS = 100
 ELASTICITY_FALLBACK = -1e-3  # used only if resampling can't find a negative draw (should not occur in practice)
+
+_default_control_effects: ControlEffects | None = None
+
+
+def _get_default_control_effects() -> ControlEffects:
+    """Lazily loaded and cached at module scope -- data/app/control_effects.csv doesn't
+    change within a process's lifetime, so there's no reason to re-read/re-parse it
+    on every simulation run."""
+    global _default_control_effects
+    if _default_control_effects is None:
+        _default_control_effects = parse_control_effects(load_control_effects())
+    return _default_control_effects
 
 # Generic starting-belief mean for the prior -- deliberately NOT looked up
 # per SKU or per product category. An earlier version used sku_master.csv's
@@ -154,6 +176,7 @@ def run_adaptive_simulation(
     min_margin: float | None = None,
     max_price_change_pct: float | None = None,
     inventory_override: float | None = None,
+    control_effects: ControlEffects | None = None,
 ) -> AdaptiveSimulationResult:
     """
     `inventory_override`, if given, replaces Day 1's starting inventory
@@ -161,7 +184,16 @@ def run_adaptive_simulation(
     keeping the three-way comparison fair. Only Day 1 can be overridden;
     every later day is already determined by each variant's own prior
     decisions plus replenishment, not by history.
+
+    `control_effects`, if given, overrides the default (loaded once from
+    `data/app/control_effects.csv`) used to residualize Thompson Sampling's
+    online update against promotion/event/day-of-week confounding -- see
+    module docstring and `bayesian_learning.control_log_effect`. Exposed as
+    a parameter mainly for tests (e.g. `ControlEffects.zero()` to disable
+    residualization and confirm it's a no-op when there's nothing to
+    correct for).
     """
+    effects = control_effects if control_effects is not None else _get_default_control_effects()
     start_date = pd.Timestamp(start_date)
     window_dates = pd.date_range(start_date, periods=n_days, freq="D")
 
@@ -176,6 +208,7 @@ def run_adaptive_simulation(
     if sku_row.empty:
         raise ValueError(f"Unknown sku {sku!r} -- not present in sku_master")
     cost = float(sku_row.iloc[0]["cost"])
+    product_type = str(sku_row.iloc[0]["product_type"])
 
     rng = np.random.default_rng(random_seed)
 
@@ -221,6 +254,7 @@ def run_adaptive_simulation(
     oracle_days: list[VariantDay] = []
 
     prev_actual_ending_inventory: float | None = None
+    prev_date: pd.Timestamp | None = None
 
     for date in window_dates:
         row = sku_daily.loc[date]
@@ -348,7 +382,23 @@ def run_adaptive_simulation(
 
         if ts_units > 0 and anchor["thompson"]["units"] > 0:
             dlog_price = np.log(ts_price) - np.log(anchor["thompson"]["price"])
-            dlog_units = np.log(ts_units) - np.log(anchor["thompson"]["units"])
+            dlog_units_raw = np.log(ts_units) - np.log(anchor["thompson"]["units"])
+            # Subtract Phase 2/3's fitted promo/event/dow effect between the anchor day
+            # and today, so it doesn't get misread as price sensitivity below (see module
+            # docstring). On Day 1 the anchor *is* today (prev_date is None), so the two
+            # control_log_effect calls would be identical anyway -- skipping is just an
+            # equivalent shortcut, not a different day-1 behavior.
+            if prev_date is not None:
+                control_effect_today = control_log_effect(
+                    effects, product_type, row["promotion_depth"], row["event_phase"], date.day_name()
+                )
+                prev_row = sku_daily.loc[prev_date]
+                control_effect_anchor = control_log_effect(
+                    effects, product_type, prev_row["promotion_depth"], prev_row["event_phase"], prev_date.day_name()
+                )
+                dlog_units = dlog_units_raw - (control_effect_today - control_effect_anchor)
+            else:
+                dlog_units = dlog_units_raw
             posterior = update_posterior(posterior, dlog_price, dlog_units)
         # else: a zero-unit day (this trajectory's or its anchor's) carries
         # no learnable signal (log(0) undefined) -- belief carries over
@@ -356,6 +406,7 @@ def run_adaptive_simulation(
 
         anchor["thompson"] = {"price": ts_price, "units": ts_units, "inventory": ts_ending_inventory}
         prev_actual_ending_inventory = float(row["ending_inventory"])
+        prev_date = date
 
     return AdaptiveSimulationResult(
         sku=sku,

@@ -19,8 +19,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import numpy as np
 import pandas as pd
 
-from bayesian_learning import build_prior, update_posterior, sample_theta, posterior_mean_beta, credible_interval_beta
-from data_loader import load_sku_master, load_daily_timeseries
+from bayesian_learning import (
+    build_prior,
+    update_posterior,
+    sample_theta,
+    posterior_mean_beta,
+    credible_interval_beta,
+    ControlEffects,
+    control_log_effect,
+    parse_control_effects,
+)
+from data_loader import load_sku_master, load_daily_timeseries, load_control_effects
 from adaptive_simulation import run_adaptive_simulation, adaptive_to_frame
 
 N_SEEDS = 20
@@ -86,6 +95,66 @@ class TestNIGPosteriorMath(unittest.TestCase):
         self.assertEqual(a, b)
 
 
+class TestControlResidualization(unittest.TestCase):
+    """
+    Tests the confound-correction claim in bayesian_learning.py's module
+    docstring directly: when a confound is correlated with the price change
+    being regressed on (the same failure mode as an uncontrolled
+    difference-in-differences estimate), the raw update recovers a biased
+    beta. Subtracting the confound's already-known effect first should
+    recover something much closer to the true beta.
+    """
+
+    def test_residualizing_a_correlated_confound_reduces_bias(self):
+        rng = np.random.default_rng(3)
+        true_beta = -1.8
+        confound_coef = 0.6  # e.g. a promotion's lift to log(units) when "on"
+
+        effects = ControlEffects(
+            promo_type_coef={"Commodity": confound_coef},
+            promo_mean=0.0,
+            promo_std=1.0,
+            event_phase_coef={},
+            day_of_week_coef={},
+        )
+
+        raw_post = build_prior(prior_mean_elasticity=0.0, prior_strength=0.001)
+        adj_post = build_prior(prior_mean_elasticity=0.0, prior_strength=0.001)
+
+        for _ in range(300):
+            # Promotions coincide with price cuts more often than not -- the confound.
+            promo_on = rng.random() < 0.7
+            dlog_price = rng.normal(-0.05 if promo_on else 0.0, 0.1)
+            confound = confound_coef if promo_on else 0.0
+            dlog_units = true_beta * dlog_price + confound + rng.normal(0, 0.05)
+
+            raw_post = update_posterior(raw_post, dlog_price, dlog_units)
+
+            # promo_mean=0, promo_std=1 makes control_log_effect's z-score a no-op, so this
+            # returns exactly confound_coef * promo_on -- matching the synthetic confound above.
+            effect = control_log_effect(effects, "Commodity", 1.0 if promo_on else 0.0, "normal", "Monday")
+            adj_post = update_posterior(adj_post, dlog_price, dlog_units - effect)
+
+        raw_error = abs(posterior_mean_beta(raw_post) - true_beta)
+        adj_error = abs(posterior_mean_beta(adj_post) - true_beta)
+        self.assertLess(adj_error, raw_error * 0.5)
+
+    def test_zero_effects_is_a_no_op(self):
+        effects = ControlEffects.zero()
+        self.assertEqual(control_log_effect(effects, "Commodity", 5.0, "event", "Monday"), 0.0)
+        self.assertEqual(control_log_effect(effects, "Unknown Type", -3.0, "unknown_phase", "Someday"), 0.0)
+
+    def test_parse_control_effects_round_trips_real_exported_file(self):
+        effects = parse_control_effects(load_control_effects())
+        # All four product types from sku_master should have a promo coefficient.
+        for product_type in ["Commodity", "Premium", "Promo Sensitive", "Seasonal"]:
+            self.assertIn(product_type, effects.promo_type_coef)
+        # All seven days should resolve to a real number (six fitted + one zero baseline).
+        for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]:
+            self.assertIn(day, effects.day_of_week_coef)
+        self.assertGreater(effects.promo_std, 0.0)
+
+
 class TestAdaptiveSimulationInvariants(unittest.TestCase):
     """Deterministic (single-run) structural invariants -- not stochastic behavior."""
 
@@ -145,6 +214,29 @@ class TestAdaptiveSimulationInvariants(unittest.TestCase):
     def test_unknown_sku_raises(self):
         with self.assertRaises(ValueError):
             run_adaptive_simulation(self.sku_master, self.daily, "SKU_999", TEST_START, n_days=10)
+
+    def test_zero_control_effects_runs_without_error(self):
+        result = run_adaptive_simulation(
+            self.sku_master, self.daily, TEST_SKU, TEST_START, n_days=15, random_seed=7,
+            control_effects=ControlEffects.zero(),
+        )
+        self.assertEqual(len(result.thompson), 15)
+
+    def test_real_control_effects_change_the_learned_posterior_vs_zero(self):
+        # Confirms the residualization is actually wired into the online update on real
+        # data -- not just present in bayesian_learning.py's math but dead code here.
+        zero_result = run_adaptive_simulation(
+            self.sku_master, self.daily, TEST_SKU, TEST_START, n_days=20, random_seed=7,
+            control_effects=ControlEffects.zero(),
+        )
+        real_result = run_adaptive_simulation(
+            self.sku_master, self.daily, TEST_SKU, TEST_START, n_days=20, random_seed=7,
+        )
+        self.assertNotAlmostEqual(
+            posterior_mean_beta(zero_result.final_posterior),
+            posterior_mean_beta(real_result.final_posterior),
+            places=6,
+        )
 
 
 class TestThompsonSamplingStochasticBehavior(unittest.TestCase):

@@ -1,0 +1,18 @@
+kind,key,coefficient
+promo_type,Commodity,0.04888260668261355
+promo_type,Premium,0.010856117756831936
+promo_type,Promo Sensitive,0.07381432720860687
+promo_type,Seasonal,0.06661840016417665
+event_phase,pre_event,-0.14070154767205115
+event_phase,event,0.3749304496375793
+event_phase,post_event,-0.21101454834500047
+day_of_week,Monday,-0.20819614067305564
+day_of_week,Saturday,0.11816946540333884
+day_of_week,Sunday,0.042728762795093855
+day_of_week,Thursday,-0.11023715386175319
+day_of_week,Tuesday,-0.18973836423172505
+day_of_week,Wednesday,-0.15665035292459994
+day_of_week,Friday,0.0
+event_phase,normal,0.0
+promo_standardization,mean,0.009770852803141486
+promo_standardization,std,0.034155751390086905

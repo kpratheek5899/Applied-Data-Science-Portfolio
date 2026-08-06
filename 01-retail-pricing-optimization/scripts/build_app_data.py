@@ -150,6 +150,53 @@ def build_daily_sku_timeseries(df: pd.DataFrame) -> pd.DataFrame:
     return daily.sort_values(["sku", "date"]).reset_index(drop=True)
 
 
+def build_control_effects(idata, bayes_agg: pd.DataFrame) -> pd.DataFrame:
+    """
+    Point estimates (posterior means) of Phase 3's fitted promotion/event/
+    day-of-week effects, exported so Adaptive Learning can residualize its
+    1-parameter online update against them (see src/bayesian_learning.py).
+    Channel, region, and marketing-spend (search/social/display)
+    coefficients also exist in the posterior but aren't exported here:
+    daily_sku_timeseries.csv doesn't carry channel/region/marketing-spend at
+    its aggregated (date, sku) grain, so there's nothing at runtime to
+    multiply them against.
+    """
+    gamma_promo = idata.posterior["gamma_promo"].mean(dim=("chain", "draw"))
+    gamma = idata.posterior["gamma"].mean(dim=("chain", "draw"))
+
+    rows = []
+    for level, val in zip(gamma_promo["product_type"].to_numpy(), gamma_promo.to_numpy()):
+        rows.append({"kind": "promo_type", "key": str(level), "coefficient": float(val)})
+
+    for name, val in zip(gamma["control"].to_numpy(), gamma.to_numpy()):
+        name = str(name)
+        if name.startswith("ph_"):
+            rows.append({"kind": "event_phase", "key": name[len("ph_"):], "coefficient": float(val)})
+        elif name.startswith("dow_"):
+            rows.append({"kind": "day_of_week", "key": name[len("dow_"):], "coefficient": float(val)})
+        # log_search/log_social/log_display/ch_*/reg_* intentionally not exported (see docstring above)
+
+    # pd.get_dummies(..., drop_first=True) drops the alphabetically-first level as the
+    # reference category -- its implied coefficient is 0, but it never appears in `gamma`,
+    # so it has to be added back explicitly here or it would silently be treated as missing
+    # (control_log_effect's dict.get(..., 0.0) fallback) rather than as a real, known zero.
+    exported_dow = {r["key"] for r in rows if r["kind"] == "day_of_week"}
+    for day in sorted(bayes_agg["day_of_week"].astype(str).unique()):
+        if day not in exported_dow:
+            rows.append({"kind": "day_of_week", "key": day, "coefficient": 0.0})
+
+    exported_phases = {r["key"] for r in rows if r["kind"] == "event_phase"}
+    for phase in sorted(bayes_agg["event_phase"].astype(str).unique()):
+        if phase not in exported_phases:
+            rows.append({"kind": "event_phase", "key": phase, "coefficient": 0.0})
+
+    promo = bayes_agg["promotion_depth"].astype(float)
+    rows.append({"kind": "promo_standardization", "key": "mean", "coefficient": float(promo.mean())})
+    rows.append({"kind": "promo_standardization", "key": "std", "coefficient": float(promo.std())})
+
+    return pd.DataFrame(rows)
+
+
 def build_posterior_samples(idata, meta, n_per_sku: int = N_POSTERIOR_DRAWS_PER_SKU) -> pd.DataFrame:
     """Thin posterior draws of beta_sku (per-SKU elasticity) for the risk-aware optimizer."""
     sku_levels = meta["sku_levels"]
@@ -207,8 +254,13 @@ def main():
     posterior_samples.to_csv(OUT_DIR / "posterior_samples.csv", index=False)
     print(f"  {len(posterior_samples):,} rows -> {OUT_DIR / 'posterior_samples.csv'}")
 
+    print("Building control_effects.csv...", flush=True)
+    control_effects = build_control_effects(idata, bayes_agg)
+    control_effects.to_csv(OUT_DIR / "control_effects.csv", index=False)
+    print(f"  {len(control_effects)} rows -> {OUT_DIR / 'control_effects.csv'}")
+
     print(f"\nDone. Total elapsed: {time.time() - t0:.1f}s")
-    for f in ["sku_master.csv", "daily_sku_timeseries.csv", "posterior_samples.csv"]:
+    for f in ["sku_master.csv", "daily_sku_timeseries.csv", "posterior_samples.csv", "control_effects.csv"]:
         size_kb = (OUT_DIR / f).stat().st_size / 1024
         print(f"  {f}: {size_kb:,.0f} KB")
 

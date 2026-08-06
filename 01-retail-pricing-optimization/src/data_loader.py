@@ -40,6 +40,12 @@ def load_posterior_samples(data_dir: Path = DATA_APP_DIR) -> pd.DataFrame:
     return pd.read_csv(data_dir / "posterior_samples.csv")
 
 
+def load_control_effects(data_dir: Path = DATA_APP_DIR) -> pd.DataFrame:
+    """Phase 3's fitted promotion/event/day-of-week coefficients (posterior means),
+    for Adaptive Learning's residualized online update -- see src/bayesian_learning.py."""
+    return pd.read_csv(data_dir / "control_effects.csv")
+
+
 def get_date_bounds(daily_df: pd.DataFrame) -> tuple[pd.Timestamp, pd.Timestamp]:
     """Real min/max date present in the data -- for the date-range picker, never hardcoded."""
     return daily_df["date"].min(), daily_df["date"].max()

@@ -55,8 +55,9 @@ st.info(
     "of its own pricing decisions. The decision each day never sees the true elasticity -- only Oracle "
     "(labeled below as *\"if we had known the truth all along\"* -- a theoretical upper bound for "
     "comparison, not something this app claims to achieve) and the outcome-realization step do. "
-    "The underlying model is simple (no controls for promotion, event, or day-of-week effects), so treat "
-    "this as a methodology demo, not a production forecast."
+    "Before each day's outcome updates the belief, promotion, event, and day-of-week effects are removed "
+    "from it using effect sizes already estimated in Phases 2-3, so they don't get mistaken for price "
+    "sensitivity -- elasticity itself is the only thing still being learned online."
 )
 
 sku_master = load_sku_master()
