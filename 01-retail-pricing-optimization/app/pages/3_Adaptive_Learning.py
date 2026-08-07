@@ -216,7 +216,11 @@ conf1.metric(
 conf2.metric(
     f"Day {day_index + 1}: elasticity 90% CI",
     f"[{selected_ts_day.posterior_ci_low:.2f}, {selected_ts_day.posterior_ci_high:.2f}]",
-    f"width {selected_width - day1_width:+.2f} vs. Day 1",
+    # The sign has to be the very first character or Streamlit's delta-color logic can't
+    # detect it (it checks str(delta).startswith("-"), not the numeric value) -- putting
+    # "width"/"vs. Day 1" before the number silently broke this: every delta read as
+    # "positive" regardless of its actual sign, so narrowing showed red instead of green.
+    f"{selected_width - day1_width:+.2f} width vs. Day 1",
     delta_color="inverse",  # narrower (negative change) is the desired direction
     help="The 90% credible interval as of the currently selected day. A negative width delta means the belief has narrowed -- i.e. genuine learning.",
 )
