@@ -24,7 +24,36 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from data_loader import load_sku_master, load_daily_timeseries, load_posterior_samples, get_date_bounds, get_elasticity_samples
 from replay_engine import run_closed_loop_replay, replay_to_frame
 from metrics import format_currency, format_pct
-from style import inject_metric_css
+from style import inject_metric_css, chart_info
+
+
+def _explain_trajectory_chart(objective: str, days) -> str:
+    lines = [
+        "**Actual** is what really happened historically. **Optimizer-driven** is what the model would "
+        "have decided instead, scored against the true simulator outcome -- not the actual historical "
+        "outcome. Cumulative revenue/profit are running totals from Day 1 through the day currently "
+        "selected; ending inventory reflects each trajectory's own decisions, not the fixed historical "
+        "record."
+    ]
+    if objective == "maximize_revenue":
+        lines.append(
+            "Maximize Revenue has no in-between price for this kind of demand curve -- it's always the "
+            "cheapest or priciest price allowed, never something in the middle, so the optimizer's price "
+            "can look like it's pinned to one edge or jumping between two, rather than moving smoothly."
+        )
+    optimizer_total = sum(d.optimizer_profit for d in days)
+    actual_total = sum(d.actual_profit for d in days)
+    if optimizer_total >= actual_total:
+        lines.append("Over this window, the optimizer-driven policy out-earned what actually happened historically.")
+    else:
+        lines.append(
+            "Over this window, the optimizer-driven policy actually earned less than what really happened "
+            "historically -- the estimated model isn't guaranteed to beat history on every window, only on "
+            "average across many."
+        )
+    if any(d.optimizer_stockout for d in days):
+        lines.append("The optimizer trajectory stocked out on at least one day in this window.")
+    return "\n\n".join(lines)
 
 st.set_page_config(page_title="Decision Replay -- Nova Retail", page_icon="🔁", layout="wide")
 inject_metric_css()
@@ -260,14 +289,7 @@ if selected.optimizer_stockout:
 # comparison under the larger revenue numbers).
 # ---------------------------------------------------------------------------
 
-st.markdown("##### Actual vs. optimizer-driven pricing over the window")
-st.caption(
-    "**Cumulative revenue/profit ($):** each day's revenue or profit added to the running total from "
-    "day 1 through the day currently selected (dotted vertical line) -- not a daily amount, the "
-    "window-to-date sum. **Ending inventory:** units left in stock at the end of each day under that "
-    "trajectory's own decisions -- the optimizer's line reflects every one of its own prior days' "
-    "pricing choices, not the fixed historical record."
-)
+chart_info("Actual vs. optimizer-driven pricing over the window", _explain_trajectory_chart(objective, days))
 
 fig, (ax_revenue, ax_profit, ax_inventory) = plt.subplots(3, 1, figsize=(9, 9), sharex=True, facecolor=COLOR_SURFACE)
 

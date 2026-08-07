@@ -26,7 +26,88 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from data_loader import load_sku_master, load_daily_timeseries, get_date_bounds
 from adaptive_simulation import run_adaptive_simulation, adaptive_to_frame
 from metrics import format_currency
-from style import inject_metric_css
+from style import inject_metric_css, chart_info
+
+
+def _explain_regret_chart(objective: str, result) -> str:
+    lines = [
+        "**Cumulative profit** is each policy's running total earnings. **Cumulative regret** is the "
+        "running total of profit given up that day compared to Oracle's price -- it only ever grows or "
+        "holds steady, since a past day's shortfall is never undone. **Ending inventory** is what's left "
+        "in stock under each policy's own pricing decisions.",
+    ]
+    if objective == "maximize_revenue":
+        lines.append(
+            "Maximize Revenue has no in-between price for this kind of demand curve -- it's always the "
+            "cheapest or priciest price allowed, never something in the middle. If lines below sit exactly "
+            "on top of each other, or jump sharply, that's this all-or-nothing choice, not a data problem."
+        )
+    elif objective == "protect_inventory":
+        lines.append(
+            "With Protect Inventory selected, each day's price is raised (if needed) to keep that day's "
+            "*expected* units within what's actually in stock. A marked stockout means the day's *realized* "
+            "demand still outran available inventory despite that -- the floor uses the model's belief, not "
+            "the true demand curve, so it isn't a hard guarantee against a wrong belief."
+        )
+    else:
+        agree = sum(1 for s, o in zip(result.static, result.oracle) if abs(s.price - o.price) < 0.01) / len(
+            result.static
+        )
+        if agree > 0.5:
+            lines.append(
+                "Static and Oracle charged the identical price on most days here -- both wanted to charge "
+                "more than this window's price cap allows, so both simply hit the same ceiling despite "
+                "having different opinions about elasticity."
+            )
+    thompson_total = sum(d.profit for d in result.thompson)
+    static_total = sum(d.profit for d in result.static)
+    if thompson_total >= static_total:
+        lines.append("On this run, Thompson Sampling out-earned the frozen Static baseline.")
+    else:
+        lines.append(
+            "On this run, Thompson Sampling actually earned less than the frozen Static baseline -- "
+            "exploration is a real bet, and it doesn't pay off in every single run, only on average."
+        )
+    return "\n\n".join(lines)
+
+
+def _explain_belief_chart(day1_day, selected_day, true_elasticity: float) -> str:
+    day1_width = day1_day.posterior_ci_high - day1_day.posterior_ci_low
+    selected_width = selected_day.posterior_ci_high - selected_day.posterior_ci_low
+    lines = [
+        "This is the model's 90% confidence range for this SKU's true price sensitivity (elasticity) -- "
+        "narrower means more confident. The dot is the single best guess; the dashed red line is the true "
+        "answer (visible here only because this is a simulation -- a real business never gets to see it)."
+    ]
+    if selected_width < day1_width:
+        lines.append("On this run, the range has genuinely narrowed since Day 1 -- real learning happened.")
+    else:
+        lines.append(
+            "On this run, the range hasn't narrowed (or even widened slightly) since Day 1 -- a single "
+            "surprising day's outcome can do that; the underlying math still gets more confident on "
+            "average over many days, just not guaranteed on any one run."
+        )
+    if not (selected_day.posterior_ci_low <= true_elasticity <= selected_day.posterior_ci_high):
+        lines.append("The true elasticity currently sits outside this range -- the belief hasn't found it yet.")
+    return "\n\n".join(lines)
+
+
+def _explain_price_trajectory_chart(objective: str, ts_df) -> str:
+    n_exploring = int(ts_df["is_exploring"].sum())
+    n_total = len(ts_df)
+    lines = [
+        f"Each day, Thompson Sampling either prices close to its current best guess (**Exploiting**) or "
+        f"deliberately tries a different guess to learn faster (**Exploring**, triangles) -- {n_exploring} "
+        f"of {n_total} days here were exploring. Price swings on exploring days are the cost of learning, "
+        "not mistakes."
+    ]
+    if objective == "maximize_revenue":
+        lines.append(
+            "Under Maximize Revenue specifically, there's no in-between price -- each day's price is either "
+            "the cheapest or priciest one allowed, so an exploring day can mean a big jump between the two, "
+            "not a small step."
+        )
+    return "\n\n".join(lines)
 
 st.set_page_config(page_title="Adaptive Learning -- Nova Retail", page_icon="🧠", layout="wide")
 inject_metric_css()
@@ -248,16 +329,9 @@ conf3.metric(
 # elsewhere in this app).
 # ---------------------------------------------------------------------------
 
-st.markdown("##### Cumulative profit, regret & inventory: static vs. Thompson Sampling vs. Oracle")
-st.caption(
-    "Regret = profit under Oracle's price that day minus profit under the variant's own price. Oracle's "
-    "regret is exactly zero by construction (its own price *is* the day's true-optimal price). Thompson "
-    "Sampling's cumulative regret should grow more slowly than Static's over the window, since Static "
-    "repeats the same mistake every day while Thompson keeps adjusting to what it's observed. "
-    "**Ending inventory:** units left in stock at the end of each day under that variant's own pricing "
-    "decisions -- with Protect Inventory selected as the objective, each day's price is raised (if needed) "
-    "to keep that day's expected units within what's actually in stock; a marked stockout means the day's "
-    "*realized* demand still outran available inventory despite that."
+chart_info(
+    "Cumulative profit, regret & inventory: static vs. Thompson Sampling vs. Oracle",
+    _explain_regret_chart(objective, result),
 )
 
 # Distinct linestyles, not just color: under some objectives (Maximize Revenue especially -- see the
@@ -314,9 +388,12 @@ plt.close(fig1)
 # 2. Posterior-narrowing chart: day 1 vs. currently scrubbed day
 # ---------------------------------------------------------------------------
 
-st.markdown("##### Belief about elasticity: Day 1 vs. Day " + str(day_index + 1))
 true_elasticity = float(
     daily.loc[(daily["sku"] == sku) & (daily["date"] == result.thompson[0].date), "true_price_elasticity"].iloc[0]
+)
+chart_info(
+    f"Belief about elasticity: Day 1 vs. Day {day_index + 1}",
+    _explain_belief_chart(day1_ts_day, selected_ts_day, true_elasticity),
 )
 
 fig2, ax2 = plt.subplots(figsize=(9, 2.2), facecolor=COLOR_SURFACE)
@@ -341,13 +418,11 @@ plt.close(fig2)
 # 3. Annotated price trajectory: explore vs. exploit
 # ---------------------------------------------------------------------------
 
-st.markdown("##### Thompson Sampling's price trajectory: exploring vs. exploiting")
-st.caption(
-    "A day is marked \"exploring\" when the sampled elasticity that day deviated more than 0.5 posterior "
-    "standard deviations from the current belief's mean -- a deliberate probe, not a mistake."
-)
-
 ts_df = df[df["variant"] == "thompson"].reset_index(drop=True)
+chart_info(
+    "Thompson Sampling's price trajectory: exploring vs. exploiting",
+    _explain_price_trajectory_chart(objective, ts_df),
+)
 fig3, ax3 = plt.subplots(figsize=(9, 4), facecolor=COLOR_SURFACE)
 ax3.set_facecolor(COLOR_SURFACE)
 days_axis = np.arange(1, len(ts_df) + 1)

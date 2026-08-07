@@ -5,6 +5,20 @@ each page, right after `st.set_page_config`.
 import streamlit as st
 
 
+def chart_info(title: str, explanation: str) -> None:
+    """
+    A chart section header with a click-to-open "ⓘ" popover next to it,
+    holding a plain-language explanation of what the chart shows and why --
+    distinct from the "?" tooltips already used on inputs (those explain a
+    control; this explains a result). Click, not hover, since hover doesn't
+    work on touch devices and this app is also viewed on mobile.
+    """
+    header_col, info_col = st.columns([0.93, 0.07])
+    header_col.markdown(f"##### {title}")
+    with info_col.popover("ⓘ", width="content"):
+        st.markdown(explanation)
+
+
 def inject_metric_css() -> None:
     """
     Streamlit's default st.metric value text is single-line and truncates

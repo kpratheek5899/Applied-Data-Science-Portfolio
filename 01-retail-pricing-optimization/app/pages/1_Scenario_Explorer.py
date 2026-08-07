@@ -32,7 +32,33 @@ from scenario_engine import build_predefined_scenarios, build_manual_scenario
 from demand_model import build_demand_context, recommend_price, recommend_price_bayesian
 from explanations import generate_explanation
 from metrics import before_after_table, risk_tier, scenario_summary_line, format_currency, format_pct
-from style import inject_metric_css
+from style import inject_metric_css, chart_info
+
+
+def _explain_price_response_chart(objective: str) -> str:
+    lines = [
+        "This shows how profit, revenue, and expected units would change at every price in the allowed "
+        "range, holding today's other conditions fixed. The shaded band is the allowed price range; the "
+        "dashed line is today's actual price; the solid line is the recommended price.",
+        "Profit and Revenue often peak at different prices -- that's why Maximize Profit and Maximize "
+        "Revenue can recommend different prices for the exact same product and conditions.",
+    ]
+    if objective == "maximize_revenue":
+        lines.append(
+            "Maximize Revenue has no in-between peak for this kind of demand curve -- the Revenue line "
+            "above is either rising or falling across the whole range, so its recommended price always "
+            "sits at one edge of the shaded band, never in the middle."
+        )
+    return "\n\n".join(lines)
+
+
+def _explain_outcome_range_chart(result, n_draws: int) -> str:
+    return (
+        f"Across {n_draws} plausible values of this SKU's elasticity (not one single guess), this shows "
+        "the range of likely outcomes at the recommended price -- the dot is the median draw, the bar "
+        "spans the 10th to 90th percentile. A wider bar means more uncertainty about this SKU's true "
+        f"elasticity. Estimated stockout probability at this price: {result['stockout_probability']:.1%}."
+    )
 
 st.set_page_config(page_title="Scenario Explorer -- Nova Retail", page_icon="🎛️", layout="wide")
 inject_metric_css()
@@ -389,6 +415,8 @@ if binding is not None:
 # units gets its own panel, per the dataviz skill's "no dual axis" rule).
 # ---------------------------------------------------------------------------
 
+chart_info("Profit, Revenue & Units vs. Price", _explain_price_response_chart(scenario.objective))
+
 curve = result["curve"]
 bounds_lo, bounds_hi = result["price_bounds"]
 
@@ -436,10 +464,9 @@ plt.close(fig)
 # ---------------------------------------------------------------------------
 
 if use_bayesian and "profit_distribution" in result:
-    st.markdown("##### Likely outcome range at the recommended price")
-    st.caption(
-        f"Across {len(elasticity_samples)} posterior draws of this SKU's elasticity "
-        f"(stockout probability at the recommended price: {result['stockout_probability']:.1%})."
+    chart_info(
+        "Likely outcome range at the recommended price",
+        _explain_outcome_range_chart(result, len(elasticity_samples)),
     )
 
     fig2, (ax_dollars_dist, ax_units_dist) = plt.subplots(2, 1, figsize=(9, 3), facecolor=COLOR_SURFACE)
