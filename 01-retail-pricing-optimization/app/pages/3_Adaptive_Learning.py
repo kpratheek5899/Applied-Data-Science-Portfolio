@@ -47,6 +47,7 @@ COLOR_EXPLORE = "#eb6834"  # categorical slot 2
 COLOR_GRID = "#e1e0d9"
 COLOR_SURFACE = "#fcfcfb"
 COLOR_TRUE = "#d03b3b"  # status critical, reference-only marker
+COLOR_STOCKOUT = "#d03b3b"  # status: critical
 
 st.title("Adaptive Learning: Watch the Model Learn")
 st.info(
@@ -227,17 +228,20 @@ conf3.metric(
 )
 
 # ---------------------------------------------------------------------------
-# 1. Cumulative profit / regret race chart -- small multiples (different
+# 1. Cumulative profit / regret / inventory -- small multiples (different
 # scales, per the dataviz skill's "no dual axis" rule already used
 # elsewhere in this app).
 # ---------------------------------------------------------------------------
 
-st.markdown("##### Cumulative profit & regret: static vs. Thompson Sampling vs. Oracle")
+st.markdown("##### Cumulative profit, regret & inventory: static vs. Thompson Sampling vs. Oracle")
 st.caption(
     "Regret = profit under Oracle's price that day minus profit under the variant's own price. Oracle's "
     "regret is exactly zero by construction (its own price *is* the day's true-optimal price). A working "
     "bandit algorithm's regret should visibly bend (sub-linear) as it learns, while a frozen belief's "
-    "regret keeps growing roughly linearly."
+    "regret keeps growing roughly linearly. **Ending inventory:** units left in stock at the end of each "
+    "day under that variant's own pricing decisions -- with Protect Inventory selected as the objective, "
+    "each day's price is raised (if needed) to keep that day's expected units within what's actually in "
+    "stock; a marked stockout means the day's *realized* demand still outran available inventory despite that."
 )
 
 variant_style = [
@@ -246,24 +250,41 @@ variant_style = [
     ("oracle", COLOR_ORACLE, "Oracle (true elasticity -- upper bound only, not a real decision-maker)"),
 ]
 
-fig1, (ax1_profit, ax1_regret) = plt.subplots(2, 1, figsize=(9, 7), sharex=True, facecolor=COLOR_SURFACE)
-for ax in (ax1_profit, ax1_regret):
+fig1, (ax1_profit, ax1_regret, ax1_inventory) = plt.subplots(3, 1, figsize=(9, 10), sharex=True, facecolor=COLOR_SURFACE)
+for ax in (ax1_profit, ax1_regret, ax1_inventory):
     ax.set_facecolor(COLOR_SURFACE)
     ax.axvline(day_index + 1, color="#898781", linestyle=":", linewidth=1.2)
     ax.grid(color=COLOR_GRID, linewidth=0.8)
     ax.spines[["top", "right"]].set_visible(False)
 
+stockout_labeled = False
 for variant, color, label in variant_style:
     sub = df[df["variant"] == variant]
-    ax1_profit.plot(range(1, len(sub) + 1), sub["cumulative_profit"], color=color, linewidth=2, label=label)
-    ax1_regret.plot(range(1, len(sub) + 1), sub["cumulative_regret"], color=color, linewidth=2)
+    days_axis = range(1, len(sub) + 1)
+    ax1_profit.plot(days_axis, sub["cumulative_profit"], color=color, linewidth=2, label=label)
+    ax1_regret.plot(days_axis, sub["cumulative_regret"], color=color, linewidth=2)
+    ax1_inventory.plot(days_axis, sub["ending_inventory"], color=color, linewidth=2)
+
+    stockout_days = sub[sub["stockout"]]
+    if not stockout_days.empty:
+        stockout_x = [d for d, is_out in zip(days_axis, sub["stockout"]) if is_out]
+        ax1_inventory.scatter(
+            stockout_x, stockout_days["ending_inventory"], color=COLOR_STOCKOUT, zorder=5,
+            label=None if stockout_labeled else "Stockout",
+        )
+        stockout_labeled = True
 
 ax1_profit.set_ylabel("Cumulative profit ($)")
 ax1_profit.set_title("Cumulative profit")
 ax1_profit.legend(loc="upper left", frameon=False, fontsize=8)
 ax1_regret.set_ylabel("Cumulative regret ($)")
-ax1_regret.set_xlabel("Day")
 ax1_regret.set_title("Cumulative regret (lower is better; Oracle = 0 always)")
+ax1_inventory.axhline(0, color=COLOR_GRID, linewidth=1.2)
+ax1_inventory.set_ylabel("Ending inventory")
+ax1_inventory.set_xlabel("Day")
+ax1_inventory.set_title("Ending inventory (stockout = demand outran stock on hand)")
+if stockout_labeled:
+    ax1_inventory.legend(loc="best", frameon=False, fontsize=8)
 plt.tight_layout()
 st.pyplot(fig1)
 plt.close(fig1)
