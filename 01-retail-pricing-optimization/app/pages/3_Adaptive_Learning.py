@@ -183,6 +183,17 @@ except ValueError as e:
 df = adaptive_to_frame(result)
 n_actual_days = len(result.thompson)
 
+if objective == "maximize_revenue":
+    st.info(
+        "Maximize Revenue has no interior optimum for this kind of demand curve -- the revenue-maximizing "
+        "price always sits at one edge of the allowed price range: the ceiling when a belief is between 0 "
+        "and -1, the floor when it's more negative than -1. If every variant's belief lands on the same "
+        "side of that -1 threshold, their prices -- and therefore profit and regret -- can come out "
+        "identical, so lines overlapping below is expected, not a sign learning stopped. If a belief sits "
+        "close to -1, day-to-day sampling can also flip the recommended price between the two edges -- "
+        "same mechanism, not an error."
+    )
+
 st.divider()
 
 # ---------------------------------------------------------------------------
@@ -240,18 +251,24 @@ conf3.metric(
 st.markdown("##### Cumulative profit, regret & inventory: static vs. Thompson Sampling vs. Oracle")
 st.caption(
     "Regret = profit under Oracle's price that day minus profit under the variant's own price. Oracle's "
-    "regret is exactly zero by construction (its own price *is* the day's true-optimal price). A working "
-    "bandit algorithm's regret should visibly bend (sub-linear) as it learns, while a frozen belief's "
-    "regret keeps growing roughly linearly. **Ending inventory:** units left in stock at the end of each "
-    "day under that variant's own pricing decisions -- with Protect Inventory selected as the objective, "
-    "each day's price is raised (if needed) to keep that day's expected units within what's actually in "
-    "stock; a marked stockout means the day's *realized* demand still outran available inventory despite that."
+    "regret is exactly zero by construction (its own price *is* the day's true-optimal price). Thompson "
+    "Sampling's cumulative regret should grow more slowly than Static's over the window, since Static "
+    "repeats the same mistake every day while Thompson keeps adjusting to what it's observed. "
+    "**Ending inventory:** units left in stock at the end of each day under that variant's own pricing "
+    "decisions -- with Protect Inventory selected as the objective, each day's price is raised (if needed) "
+    "to keep that day's expected units within what's actually in stock; a marked stockout means the day's "
+    "*realized* demand still outran available inventory despite that."
 )
 
+# Distinct linestyles, not just color: under some objectives (Maximize Revenue especially -- see the
+# note above when it's selected) two or three variants can land on the exact same price every day, so
+# their lines sit exactly on top of each other. Without a linestyle to tell them apart, whichever one
+# is drawn last visually hides the others, which reads as "the other lines are missing" rather than
+# "these lines are identical."
 variant_style = [
-    ("static", COLOR_STATIC, "Static (frozen belief)"),
-    ("thompson", COLOR_THOMPSON, "Thompson Sampling"),
-    ("oracle", COLOR_ORACLE, "Oracle (true elasticity -- upper bound only, not a real decision-maker)"),
+    ("static", COLOR_STATIC, "--", "Static (frozen belief)"),
+    ("thompson", COLOR_THOMPSON, "-", "Thompson Sampling"),
+    ("oracle", COLOR_ORACLE, ":", "Oracle (true elasticity -- upper bound only, not a real decision-maker)"),
 ]
 
 fig1, (ax1_profit, ax1_regret, ax1_inventory) = plt.subplots(3, 1, figsize=(9, 10), sharex=True, facecolor=COLOR_SURFACE)
@@ -262,12 +279,12 @@ for ax in (ax1_profit, ax1_regret, ax1_inventory):
     ax.spines[["top", "right"]].set_visible(False)
 
 stockout_labeled = False
-for variant, color, label in variant_style:
+for variant, color, linestyle, label in variant_style:
     sub = df[df["variant"] == variant]
     days_axis = range(1, len(sub) + 1)
-    ax1_profit.plot(days_axis, sub["cumulative_profit"], color=color, linewidth=2, label=label)
-    ax1_regret.plot(days_axis, sub["cumulative_regret"], color=color, linewidth=2)
-    ax1_inventory.plot(days_axis, sub["ending_inventory"], color=color, linewidth=2)
+    ax1_profit.plot(days_axis, sub["cumulative_profit"], color=color, linestyle=linestyle, linewidth=2, label=label)
+    ax1_regret.plot(days_axis, sub["cumulative_regret"], color=color, linestyle=linestyle, linewidth=2)
+    ax1_inventory.plot(days_axis, sub["ending_inventory"], color=color, linestyle=linestyle, linewidth=2)
 
     stockout_days = sub[sub["stockout"]]
     if not stockout_days.empty:
