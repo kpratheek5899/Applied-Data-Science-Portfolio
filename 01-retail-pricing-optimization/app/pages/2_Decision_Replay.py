@@ -28,31 +28,51 @@ from style import inject_metric_css, chart_info
 
 
 def _explain_trajectory_chart(objective: str, days) -> str:
+    n = len(days)
+    half = n // 2 or 1
+    actual_profit = [d.actual_profit for d in days]
+    optimizer_profit = [d.optimizer_profit for d in days]
+    gap_first_half = sum(optimizer_profit[:half]) - sum(actual_profit[:half])
+    gap_second_half = sum(optimizer_profit[half:]) - sum(actual_profit[half:])
+    final_gap = sum(optimizer_profit) - sum(actual_profit)
+
+    if abs(gap_second_half) > abs(gap_first_half) * 1.3:
+        gap_trend = "and that gap keeps widening as the window goes on"
+    elif abs(gap_second_half) < abs(gap_first_half) * 0.7:
+        gap_trend = "though that gap was actually bigger earlier in the window than it is now"
+    else:
+        gap_trend = "opening up at a fairly steady pace across the whole window"
+    lead = "ahead of" if final_gap > 0 else "behind" if final_gap < 0 else "tied with"
+
+    start_inv = days[0].optimizer_starting_inventory
+    end_inv = days[-1].optimizer_ending_inventory
+    inv_change_pct = (end_inv - start_inv) / start_inv * 100 if start_inv else 0
+    if end_inv <= 0:
+        inv_desc = "and runs out entirely by the end of the window"
+    elif inv_change_pct < -15:
+        inv_desc = f"declining {abs(inv_change_pct):.0f}% over the window as it sells through stock"
+    elif inv_change_pct > 15:
+        inv_desc = f"building up {inv_change_pct:.0f}% over the window -- selling slower than it's restocked"
+    else:
+        inv_desc = "holding roughly steady across the window"
+
     lines = [
-        "**Actual** is what really happened historically. **Optimizer-driven** is what the model would "
-        "have decided instead, scored against the true simulator outcome -- not the actual historical "
-        "outcome. Cumulative revenue/profit are running totals from Day 1 through the day currently "
-        "selected; ending inventory reflects each trajectory's own decisions, not the fixed historical "
-        "record."
+        f"The blue **Optimizer-driven** cumulative-profit line ends the window {lead} the gray **Actual** "
+        f"line by {format_currency(abs(final_gap))}, {gap_trend} -- that's each day's pricing decision "
+        "compounding on top of the last, not one lucky or unlucky day.",
+        f"The blue **Ending inventory** line for the optimizer's own trajectory is {inv_desc} -- it reflects "
+        "every one of its own prior pricing decisions, not the fixed historical stock levels the gray line "
+        "shows.",
     ]
     if objective == "maximize_revenue":
         lines.append(
             "Maximize Revenue has no in-between price for this kind of demand curve -- it's always the "
-            "cheapest or priciest price allowed, never something in the middle, so the optimizer's price "
-            "can look like it's pinned to one edge or jumping between two, rather than moving smoothly."
-        )
-    optimizer_total = sum(d.optimizer_profit for d in days)
-    actual_total = sum(d.actual_profit for d in days)
-    if optimizer_total >= actual_total:
-        lines.append("Over this window, the optimizer-driven policy out-earned what actually happened historically.")
-    else:
-        lines.append(
-            "Over this window, the optimizer-driven policy actually earned less than what really happened "
-            "historically -- the estimated model isn't guaranteed to beat history on every window, only on "
-            "average across many."
+            "cheapest or priciest price allowed, never something in the middle, so the optimizer's line can "
+            "look pinned flat or can jump sharply, rather than moving smoothly."
         )
     if any(d.optimizer_stockout for d in days):
-        lines.append("The optimizer trajectory stocked out on at least one day in this window.")
+        n_stockouts = sum(1 for d in days if d.optimizer_stockout)
+        lines.append(f"The optimizer trajectory stocked out on {n_stockouts} of {n} days in this window.")
     return "\n\n".join(lines)
 
 st.set_page_config(page_title="Decision Replay -- Nova Retail", page_icon="🔁", layout="wide")

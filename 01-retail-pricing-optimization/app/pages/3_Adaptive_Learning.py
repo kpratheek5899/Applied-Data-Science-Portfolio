@@ -29,18 +29,44 @@ from metrics import format_currency
 from style import inject_metric_css, chart_info
 
 
+def _pace_description(first_half_rate: float, second_half_rate: float) -> str:
+    if second_half_rate < first_half_rate * 0.8:
+        return "slowing down"
+    if second_half_rate > first_half_rate * 1.2:
+        return "speeding up"
+    return "climbing at a fairly steady pace"
+
+
 def _explain_regret_chart(objective: str, result) -> str:
+    n = len(result.thompson)
+    half = n // 2 or 1
+    static_regret = [d.regret for d in result.static]
+    thompson_regret = [d.regret for d in result.thompson]
+    static_pace = _pace_description(
+        sum(static_regret[:half]) / half, sum(static_regret[half:]) / max(1, n - half)
+    )
+    thompson_pace = _pace_description(
+        sum(thompson_regret[:half]) / half, sum(thompson_regret[half:]) / max(1, n - half)
+    )
+    static_final = sum(static_regret)
+    thompson_final = sum(thompson_regret)
+    better_worse = "less" if thompson_final < static_final else "more"
+
     lines = [
-        "**Cumulative profit** is each policy's running total earnings. **Cumulative regret** is the "
-        "running total of profit given up that day compared to Oracle's price -- it only ever grows or "
-        "holds steady, since a past day's shortfall is never undone. **Ending inventory** is what's left "
-        "in stock under each policy's own pricing decisions.",
+        f"The gray **Static** regret line keeps {static_pace} for the whole window -- it repeats the same "
+        "pricing decision every day, so it never corrects course, and the gap to Oracle's zero line just "
+        "accumulates.",
+        f"The blue **Thompson Sampling** regret line is {thompson_pace}. By the final day it has given up "
+        f"{format_currency(thompson_final)} in total, {better_worse} than Static's "
+        f"{format_currency(static_final)}.",
     ]
+
     if objective == "maximize_revenue":
         lines.append(
             "Maximize Revenue has no in-between price for this kind of demand curve -- it's always the "
-            "cheapest or priciest price allowed, never something in the middle. If lines below sit exactly "
-            "on top of each other, or jump sharply, that's this all-or-nothing choice, not a data problem."
+            "cheapest or priciest price allowed, never something in the middle. If the profit lines above "
+            "sit exactly on top of each other, or jump sharply, that's this all-or-nothing choice, not a "
+            "data problem."
         )
     elif objective == "protect_inventory":
         lines.append(
@@ -55,51 +81,88 @@ def _explain_regret_chart(objective: str, result) -> str:
         )
         if agree > 0.5:
             lines.append(
-                "Static and Oracle charged the identical price on most days here -- both wanted to charge "
-                "more than this window's price cap allows, so both simply hit the same ceiling despite "
-                "having different opinions about elasticity."
+                "Static's and Oracle's profit lines above sit exactly on top of each other for most of the "
+                "window -- both wanted to charge more than this window's price cap allows, so both simply "
+                "hit the same ceiling despite having different opinions about elasticity."
             )
-    thompson_total = sum(d.profit for d in result.thompson)
-    static_total = sum(d.profit for d in result.static)
-    if thompson_total >= static_total:
-        lines.append("On this run, Thompson Sampling out-earned the frozen Static baseline.")
+
+    start_inv = result.thompson[0].starting_inventory
+    end_inv = result.thompson[-1].ending_inventory
+    inv_change_pct = (end_inv - start_inv) / start_inv * 100 if start_inv else 0
+    if end_inv <= 0:
+        inv_desc = "runs out entirely by the end of the window"
+    elif inv_change_pct < -15:
+        inv_desc = f"declines {abs(inv_change_pct):.0f}% over the window"
+    elif inv_change_pct > 15:
+        inv_desc = f"builds up {inv_change_pct:.0f}% over the window -- selling slower than it's restocked"
     else:
-        lines.append(
-            "On this run, Thompson Sampling actually earned less than the frozen Static baseline -- "
-            "exploration is a real bet, and it doesn't pay off in every single run, only on average."
-        )
+        inv_desc = "holds roughly steady across the window"
+    lines.append(f"Thompson Sampling's **ending inventory** {inv_desc}.")
     return "\n\n".join(lines)
 
 
 def _explain_belief_chart(day1_day, selected_day, true_elasticity: float) -> str:
     day1_width = day1_day.posterior_ci_high - day1_day.posterior_ci_low
     selected_width = selected_day.posterior_ci_high - selected_day.posterior_ci_low
-    lines = [
-        "This is the model's 90% confidence range for this SKU's true price sensitivity (elasticity) -- "
-        "narrower means more confident. The dot is the single best guess; the dashed red line is the true "
-        "answer (visible here only because this is a simulation -- a real business never gets to see it)."
-    ]
-    if selected_width < day1_width:
-        lines.append("On this run, the range has genuinely narrowed since Day 1 -- real learning happened.")
-    else:
-        lines.append(
-            "On this run, the range hasn't narrowed (or even widened slightly) since Day 1 -- a single "
-            "surprising day's outcome can do that; the underlying math still gets more confident on "
-            "average over many days, just not guaranteed on any one run."
+    day1_gap = abs(day1_day.posterior_mean_beta - true_elasticity)
+    selected_gap = abs(selected_day.posterior_mean_beta - true_elasticity)
+
+    if selected_width < day1_width * 0.9:
+        width_line = (
+            f"The blue bar is visibly shorter than the gray Day 1 bar -- the range narrowed from "
+            f"{day1_width:.2f} wide to {selected_width:.2f}, meaning the model has ruled out a lot of "
+            "elasticity values it originally thought were plausible."
         )
+    elif selected_width > day1_width * 1.1:
+        width_line = (
+            f"The blue bar is actually wider than the gray Day 1 bar ({selected_width:.2f} vs. "
+            f"{day1_width:.2f}) -- a single surprising day's outcome can temporarily widen it like this; "
+            "the underlying math still gets more confident on average over many days, just not guaranteed "
+            "on any one run."
+        )
+    else:
+        width_line = (
+            f"The blue bar is about the same width as the gray Day 1 bar ({selected_width:.2f} vs. "
+            f"{day1_width:.2f}) -- the model hasn't meaningfully narrowed down its guess yet."
+        )
+
+    if selected_gap < day1_gap * 0.8:
+        dot_line = "The black dot has also moved closer to the red dashed true-elasticity line since Day 1 -- the best guess is getting more accurate."
+    elif selected_gap > day1_gap * 1.2:
+        dot_line = "The black dot has actually drifted further from the red dashed true-elasticity line since Day 1 -- this run's evidence has pulled the guess the wrong way so far."
+    else:
+        dot_line = "The black dot sits about as far from the red dashed true-elasticity line as it did on Day 1."
+
+    lines = [width_line, dot_line]
     if not (selected_day.posterior_ci_low <= true_elasticity <= selected_day.posterior_ci_high):
-        lines.append("The true elasticity currently sits outside this range -- the belief hasn't found it yet.")
+        lines.append(
+            "The red dashed line falls outside the blue bar entirely right now -- the model's current "
+            "confidence range doesn't yet include the true answer."
+        )
     return "\n\n".join(lines)
 
 
 def _explain_price_trajectory_chart(objective: str, ts_df) -> str:
+    prices = ts_df["price"].to_numpy()
+    price_min, price_max = float(prices.min()), float(prices.max())
+    swing_pct = (price_max - price_min) / prices[0] * 100 if prices[0] else 0
     n_exploring = int(ts_df["is_exploring"].sum())
     n_total = len(ts_df)
+
+    if prices[-1] > prices[0] * 1.05:
+        trend = f"trends upward overall, from ${prices[0]:,.0f} to ${prices[-1]:,.0f}"
+    elif prices[-1] < prices[0] * 0.95:
+        trend = f"trends downward overall, from ${prices[0]:,.0f} to ${prices[-1]:,.0f}"
+    else:
+        trend = f"ends close to where it started (${prices[0]:,.0f} vs. ${prices[-1]:,.0f})"
+
     lines = [
-        f"Each day, Thompson Sampling either prices close to its current best guess (**Exploiting**) or "
-        f"deliberately tries a different guess to learn faster (**Exploring**, triangles) -- {n_exploring} "
-        f"of {n_total} days here were exploring. Price swings on exploring days are the cost of learning, "
-        "not mistakes."
+        f"The gray price line {trend}, swinging as wide as ${price_min:,.0f} to ${price_max:,.0f} along the "
+        f"way ({swing_pct:.0f}% range).",
+        f"Blue dots (**Exploiting**, {n_total - n_exploring} of {n_total} days) mostly sit close to the "
+        f"line's recent level. Orange triangles (**Exploring**, {n_exploring} of {n_total} days) are the "
+        "deliberate probes that cause the sharper up-and-down jumps -- the cost of learning faster, not "
+        "mistakes.",
     ]
     if objective == "maximize_revenue":
         lines.append(

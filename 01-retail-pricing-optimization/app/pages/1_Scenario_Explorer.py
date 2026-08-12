@@ -35,29 +35,81 @@ from metrics import before_after_table, risk_tier, scenario_summary_line, format
 from style import inject_metric_css, chart_info
 
 
-def _explain_price_response_chart(objective: str) -> str:
+def _explain_price_response_chart(curve, result, bounds_lo: float, bounds_hi: float, objective: str) -> str:
+    current_price = result["current_price"]
+    recommended_price = result["recommended_price"]
+    price_move_pct = (recommended_price - current_price) / current_price * 100
+
+    lo_row = curve.iloc[(curve["price"] - bounds_lo).abs().idxmin()]
+    hi_row = curve.iloc[(curve["price"] - bounds_hi).abs().idxmin()]
+    units_drop_pct = (lo_row["units"] - hi_row["units"]) / lo_row["units"] * 100 if lo_row["units"] else 0
+    sensitivity = "sharply" if units_drop_pct > 60 else "moderately" if units_drop_pct > 25 else "only gently"
+
+    peak_price = float(curve.loc[curve["profit"].idxmax(), "price"])
+    band_width = bounds_hi - bounds_lo
+    if peak_price >= bounds_hi - band_width * 0.02:
+        profit_shape = (
+            "The blue **Profit** line is still climbing as it reaches the right edge of the shaded band -- "
+            "it hasn't turned over yet, it's just been cut off by the price limit. That's why the "
+            "recommendation sits right at the edge instead of at a peak."
+        )
+    elif peak_price <= bounds_lo + band_width * 0.02:
+        profit_shape = (
+            "The blue **Profit** line is still falling as it reaches the left edge of the shaded band -- "
+            "even the cheapest allowed price isn't cheap enough to reach a peak, so the recommendation sits "
+            "at that edge."
+        )
+    else:
+        profit_shape = (
+            f"The blue **Profit** line rises, turns over at about ${peak_price:,.0f}, then falls -- that "
+            "turning point is what the recommended price is chasing."
+        )
+
+    if price_move_pct > 0.5:
+        recommendation_line = (
+            f"The green **Recommended** line sits {price_move_pct:.0f}% above the gray **Current** line -- "
+            "the model thinks this product is under-priced today."
+        )
+    elif price_move_pct < -0.5:
+        recommendation_line = (
+            f"The green **Recommended** line sits {abs(price_move_pct):.0f}% below the gray **Current** "
+            "line -- the model thinks this product is over-priced today."
+        )
+    else:
+        recommendation_line = (
+            "The green **Recommended** line sits almost exactly on the gray **Current** line -- today's "
+            "price is already close to what the model would pick."
+        )
     lines = [
-        "This shows how profit, revenue, and expected units would change at every price in the allowed "
-        "range, holding today's other conditions fixed. The shaded band is the allowed price range; the "
-        "dashed line is today's actual price; the solid line is the recommended price.",
-        "Profit and Revenue often peak at different prices -- that's why Maximize Profit and Maximize "
-        "Revenue can recommend different prices for the exact same product and conditions.",
+        f"The gray **Units** line drops {sensitivity} as price rises across the shaded band -- from "
+        f"{lo_row['units']:,.0f} units at the cheapest allowed price down to {hi_row['units']:,.0f} at the "
+        f"priciest ({units_drop_pct:.0f}% fewer). The steeper that drop, the more this product's sales react "
+        "to a price change.",
+        profit_shape,
+        recommendation_line,
     ]
     if objective == "maximize_revenue":
         lines.append(
-            "Maximize Revenue has no in-between peak for this kind of demand curve -- the Revenue line "
-            "above is either rising or falling across the whole range, so its recommended price always "
-            "sits at one edge of the shaded band, never in the middle."
+            "Under Maximize Revenue, the orange **Revenue** line above doesn't have a turning point either "
+            "way -- it just keeps rising or keeps falling across the whole band, which is why its "
+            "recommendation always lands on one edge rather than a peak in the middle."
         )
     return "\n\n".join(lines)
 
 
 def _explain_outcome_range_chart(result, n_draws: int) -> str:
+    profit_dist = result["profit_distribution"]
+    spread_pct = (
+        (profit_dist["p90"] - profit_dist["p10"]) / profit_dist["p50"] * 100 if profit_dist["p50"] else 0
+    )
+    confidence = "tight" if spread_pct < 15 else "moderate" if spread_pct < 40 else "wide"
     return (
-        f"Across {n_draws} plausible values of this SKU's elasticity (not one single guess), this shows "
-        "the range of likely outcomes at the recommended price -- the dot is the median draw, the bar "
-        "spans the 10th to 90th percentile. A wider bar means more uncertainty about this SKU's true "
-        f"elasticity. Estimated stockout probability at this price: {result['stockout_probability']:.1%}."
+        f"The blue bar spans this SKU's likely profit outcomes across {n_draws} plausible elasticity "
+        f"values, from a pessimistic ${profit_dist['p10']:,.0f} to an optimistic ${profit_dist['p90']:,.0f}, "
+        f"centered on ${profit_dist['p50']:,.0f} (the dot) -- a {confidence} range (±{spread_pct / 2:.0f}% "
+        "around the middle). The wider this bar, the less certain this SKU's true price sensitivity is, so "
+        f"the more caution the recommended price should carry. Estimated chance of running out of stock at "
+        f"this price: {result['stockout_probability']:.1%}."
     )
 
 st.set_page_config(page_title="Scenario Explorer -- Nova Retail", page_icon="🎛️", layout="wide")
@@ -415,10 +467,13 @@ if binding is not None:
 # units gets its own panel, per the dataviz skill's "no dual axis" rule).
 # ---------------------------------------------------------------------------
 
-chart_info("Profit, Revenue & Units vs. Price", _explain_price_response_chart(scenario.objective))
-
 curve = result["curve"]
 bounds_lo, bounds_hi = result["price_bounds"]
+
+chart_info(
+    "Profit, Revenue & Units vs. Price",
+    _explain_price_response_chart(curve, result, bounds_lo, bounds_hi, scenario.objective),
+)
 
 fig, (ax_dollars, ax_units) = plt.subplots(2, 1, figsize=(9, 7), sharex=True, facecolor=COLOR_SURFACE)
 
