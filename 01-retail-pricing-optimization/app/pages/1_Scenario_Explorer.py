@@ -106,7 +106,7 @@ def _explain_outcome_range_chart(result, n_draws: int) -> str:
     return (
         f"The blue bar spans this SKU's likely profit outcomes across {n_draws} plausible elasticity "
         f"values, from a pessimistic ${profit_dist['p10']:,.0f} to an optimistic ${profit_dist['p90']:,.0f}, "
-        f"centered on ${profit_dist['p50']:,.0f} (the dot) -- a {confidence} range (±{spread_pct / 2:.0f}% "
+        f"centered on ${profit_dist['p50']:,.0f} (the green dot) -- a {confidence} range (±{spread_pct / 2:.0f}% "
         "around the middle). The wider this bar, the less certain this SKU's true price sensitivity is, so "
         f"the more caution the recommended price should carry. Estimated chance of running out of stock at "
         f"this price: {result['stockout_probability']:.1%}."
