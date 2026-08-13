@@ -128,7 +128,7 @@ with st.sidebar:
 # additional categorical hues.
 COLOR_PROFIT = "#2a78d6"  # categorical slot 1 (blue)
 COLOR_REVENUE = "#eb6834"  # categorical slot 2 (orange)
-COLOR_UNITS = "#2a78d6"
+COLOR_UNITS = "#52514e"  # secondary ink -- its own panel, no other series to distinguish it from
 COLOR_CURRENT = "#52514e"  # secondary ink
 COLOR_RECOMMENDED = "#0ca30c"  # status: good
 COLOR_GRID = "#e1e0d9"
